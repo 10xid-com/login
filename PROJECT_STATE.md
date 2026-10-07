@@ -117,7 +117,7 @@ Captured by Codex on Paolo's machine on 2026-10-07 (about 14:30 UTC), after the 
 - Applying repository migrations to an empty Neon database is not schema-only. Migration 0012 contains committed application data and creates up to 8 organizations, 8 users, and 8 memberships; later migrations audit/reconcile some of that data. Therefore a naïve source data import onto the migrated target risks uniqueness/PK conflicts and must not proceed until target state is baselined and the copy method is adjusted.
 - Neon post-migration counts include organizations=8, users=8, user_emails=8, memberships=8, permissions=1, task_time_bands=3, while most other tables are empty.
 - The Neon migration journal contains 20 entries, but its hashes differ from the Railway source journal for many IDs (IDs 1-3 and 5-20). *Corrected 2026-10-07:* this does not mean the repository's migration files changed, since Railway's hashes match the current files exactly. The pattern matches line endings instead: converting the files to CRLF changes the hash of every one except ID 4 (`0003_job_counter`), exactly the IDs that differ. Most likely Neon was migrated from a checkout with CRLF line endings (e.g. Windows with `core.autocrlf=true`). The SQL executed is the same; the journal hashes are not. Confirm by comparing Neon's hashes with the CRLF hashes, and migrate Neon from an LF checkout (`git config core.autocrlf false`, or a `.gitattributes` with `*.sql text eol=lf`).
-- No migration copy or restore drill has yet been performed.
+- *Corrected 2026-10-07:* a restore rehearsal of the 2026-10-02 dump into Neon and a Neon point-in-time recovery drill were performed and are recorded in `docs/recoverability-runbook.md` (all 35 table counts, all 20 journal triples, grants, RLS flags, policies and tenant isolation matched). The 2026-10-07 dump has not yet been restored anywhere.
 - Neon role/ownership/grant/RLS compatibility has not yet been re-certified.
 
 ## Architecture decisions awaiting Paolo
@@ -138,6 +138,6 @@ The copied Neon database must pass:
 8. application/database isolation tests.
 
 ## Next action
-- Restore drill: restore the 2026-10-07 Railway dump (see "Railway source baseline — 2026-10-07") into a separate Neon branch/database, per acceptance criterion 1.
-- Neon re-certification against the 2026-10-07 baseline (acceptance criteria 2–8), including migration `0020`.
+- Restore drill: restore the 2026-10-07 Railway dump (see "Railway source baseline — 2026-10-07") into a separate, empty Neon database or branch, per `docs/recoverability-runbook.md` §2–3 (acceptance criterion 1).
+- Neon re-certification against it: run `scripts/certify-copy.mjs` with the Railway source (through the tunnel) and the restored copy (criteria 2–7), then the isolation test suite on a *disposable* branch of the copy (criterion 8; the suite writes fixtures).
 - Decide whether `database-security` becomes a required check in branch protection (PR #8 is merged; the protection setting is unverified).

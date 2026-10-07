@@ -13,14 +13,21 @@ The approved recoverability architecture is Railway PostgreSQL -> Neon PostgreSQ
 Important constraints:
 
 - Treat the live Railway database as authoritative for schema, data, functions, triggers, policies, grants, and Drizzle migration history.
-- Do not reconstruct the database by replaying the current repository migrations. The committed migration files no longer reproduce the exact migration journal/hash history present on Railway, and some historical migrations contain data writes.
+- Do not reconstruct the database by replaying the current repository migrations: some historical migrations contain data writes, and the data has to come from the dump. (An earlier version of this line also said the committed migration files no longer match Railway's journal. That is not so: on 2026-10-07 all 21 Railway journal hashes matched the repository's files exactly. A journal whose hashes differ is the sign of migrations applied from a checkout with CRLF line endings; `scripts/certify-copy.mjs` reports which.)
 - Restore into a separate Neon database or branch first.
 - Keep the runtime application role separate from object ownership.
 - Do not enable FORCE RLS automatically; that remains a separate reviewed decision.
 
 ## 1. Create the Railway source dump
 
-Run from an authorized Railway shell using the owner connection already available to that runtime. Never paste database URLs into chat, tickets, or documentation.
+The database has no public endpoint. Reach it through the Railway CLI's private SSH tunnel, which needs no TCP proxy and no restart:
+
+```bash
+railway link                                         # project "10XiD Portal", environment production
+railway connect Postgres --tunnel-only --port 54329  # leave running; prints the connection details
+```
+
+Then, in a second terminal, with `DATABASE_URL` set privately to the tunnelled owner connection (never paste database URLs into chat, tickets, or documentation). Use a `pg_dump` whose major version matches the server (18), and leave out the frozen `research` schema while it still exists:
 
 ```bash
 set -e
@@ -28,6 +35,7 @@ DUMP=/tmp/10xid-railway-source.dump
 
 pg_dump "$DATABASE_URL" \
   --format=custom \
+  --exclude-schema=research \
   --no-password \
   --verbose \
   --file="$DUMP"
@@ -110,9 +118,38 @@ With `--no-owner`:
 
 Validation must be read-only.
 
+### Automated: `scripts/certify-copy.mjs` (sections 4–6 in one run)
+
+Compares the copy with its source, read-only on both, against acceptance criteria 2–7:
+
+- the migration journal, and both journals against this repository's files (LF and CRLF hashes)
+- the schema: columns, constraints, indexes, functions, triggers, enums and sequences
+- the data: exact row counts and a checksum of every row, per table
+- `portal_app`'s attributes and memberships, and that it owns nothing
+- every table grant to `portal_app`
+- the RLS flags and every policy
+- on the copy, as `portal_app`: no rows without a tenant, exactly one tenant's rows with one, and no setting left behind
+
+It exits non-zero on any mismatch.
+
+```bash
+# Owner connections to the source (via the tunnel) and to the restored copy, and
+# portal_app's connection to the copy. Set them privately, e.g. with `read -s`.
+SOURCE_URL=... TARGET_URL=... TARGET_APP_URL=... node scripts/certify-copy.mjs
+```
+
+Two things it reports without failing:
+
+- **Table owners** differ by design, because of `--no-owner`.
+- **A CHECK constraint whose text differs only in parentheses** is printed as `warn`, with both definitions, for a person to confirm. A restore re-parses the definition and Postgres flattens nested `AND`s, so `((a AND b) AND c)` comes back as `(a AND b AND c)`. In a local drill on 2026-10-07 this happened to `conversations_branch_sane` and nothing else.
+
+The result line is `CERTIFIED`, `CERTIFIED, WITH ITEMS TO REVIEW`, or `NOT CERTIFIED`. In the same drill, deleting one row, dropping one policy, revoking one grant and adding one constraint on the copy each produced a failure.
+
+The manual checks below remain the reference for what each section means.
+
 ### Public table counts
 
-Compare all public table counts against the saved Railway source baseline. The validated rehearsal matched all 35 public tables exactly.
+Compare all public table counts against the saved Railway source baseline (the current one is in `PROJECT_STATE.md`, "Railway source baseline — 2026-10-07"). The validated rehearsal matched all 35 public tables exactly.
 
 ### Drizzle migration journal
 
@@ -124,7 +161,7 @@ from drizzle.__drizzle_migrations
 order by id;
 ```
 
-The validated rehearsal matched all 20 `id/hash/created_at` triples exactly.
+The validated rehearsal (2026-10-02 dump) matched all 20 `id/hash/created_at` triples exactly. From the 2026-10-07 dump onwards there are 21, including `0020_sessions_source_session`.
 
 ## 5. Validate security structure
 
