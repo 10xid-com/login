@@ -57,11 +57,14 @@ PostgreSQL logical dumps do **not** recreate cluster roles. Required roles must 
 
 ## 2. Prepare an isolated Neon target
 
-Create a separate empty database, for example:
+Create a separate empty database **with the same encoding and collation as the source**. Railway's is `UTF8` with `en_US.utf8` collation and ctype (2026-10-07); a database created with Neon's defaults gets `C.UTF-8`, which sorts text differently, so the copy would behave differently even with identical rows. For example:
 
 ```sql
-create database railway_restore_test;
+create database railway_restore_test
+  template template0 encoding 'UTF8' lc_collate 'en_US.UTF-8' lc_ctype 'en_US.UTF-8';
 ```
+
+If the platform refuses that locale, stop and decide explicitly, not by default. Accepting a different collation changes the app's sort order, and is a decision for the owner. The certifier's "database encoding and collation" check reports exactly what the copy got.
 
 Before restore, verify the persistent application role:
 
@@ -123,9 +126,9 @@ Validation must be read-only.
 Compares the copy with its source, read-only on both, against acceptance criteria 2–7:
 
 - the migration journal, and both journals against this repository's files (LF and CRLF hashes)
-- the schema: columns, constraints, indexes, functions, triggers, enums and sequences
-- the data: exact row counts and a checksum of every row, per table
-- `portal_app`'s attributes and memberships, and that it owns nothing
+- the database's encoding and collation, then the schema: columns, constraints, indexes, functions, triggers, enums and sequences
+- the data: exact row counts and a checksum of every row, per table (rows ordered bytewise, `COLLATE "C"`, so the checksum does not depend on the database's collation)
+- `portal_app`'s attributes, the roles granted *to* it, and that it owns nothing
 - every table grant to `portal_app`
 - the RLS flags and every policy
 - on the copy, as `portal_app`: no rows without a tenant, exactly one tenant's rows with one, and no setting left behind
@@ -138,7 +141,20 @@ It exits non-zero on any mismatch.
 SOURCE_URL=... TARGET_URL=... TARGET_APP_URL=... node scripts/certify-copy.mjs
 ```
 
-Two things it reports without failing:
+**Drill or cutover.** The data comparison only means something against a source that has not changed since the dump.
+
+- **At cutover,** with writes stopped, compare against the live source; that is the default and the strict check.
+- **In a drill,** the source is still live. It changes within minutes: sessions are touched, grants are made, and every deploy refreshes `organization_domains.verified_at`. So add the row counts recorded when the dump was taken:
+
+```bash
+BASELINE_FILE=docs/baselines/railway-2026-10-07.json SOURCE_URL=... TARGET_URL=... TARGET_APP_URL=... npm run db:certify-copy
+```
+
+The copy's counts must then equal the baseline. Anything that changed on the live source since the dump is listed as `drift`, not failed. Schema, journal, roles, grants, RLS and tenant context are still compared against the live source.
+
+Things it reports without failing:
+
+- **Roles that are members *of* `portal_app`.** Neon grants its owner (`neondb_owner`, granted by `cloud_admin`) admin over every role it creates, with `inherit` and `set` false. That lets the owner manage the role's membership, but gives `portal_app` nothing and does not let the owner act as it. Roles granted *to* `portal_app` are what could widen it, and those must match.
 
 - **Table owners** differ by design, because of `--no-owner`.
 - **A CHECK constraint whose text differs only in parentheses** is printed as `warn`, with both definitions, for a person to confirm. A restore re-parses the definition and Postgres flattens nested `AND`s, so `((a AND b) AND c)` comes back as `(a AND b AND c)`. In a local drill on 2026-10-07 this happened to `conversations_branch_sane` and nothing else.
@@ -182,6 +198,17 @@ Validated rehearsal result:
 - all 27 policies matched exactly
 
 ## 6. Validate tenant isolation
+
+### Criterion 8: the isolation test suite
+
+Run `npm test` only on a **disposable branch** of the restored copy, never on the copy being certified or on Railway. The suite truncates and writes fixtures. It also needs its fixtures: the tests look up the seeded people (`paolo@brandingcentres.test`, `jane@rotary.test`, `sam@northstar.test`). A restored production copy doesn't have them, so seed the branch first, exactly as CI does:
+
+```bash
+# DATABASE_URL / DATABASE_APP_URL: the disposable branch's owner and portal_app connections
+npm run db:seed && npm test
+```
+
+Without the seed, `test/api-keys.test.ts` and `test/workspace-isolation.test.ts` fail with NOT NULL violations on `created_by`, because the fixture ids come back null. That is a missing seed, not a database fault. It is what the 2026-10-07 drill hit.
 
 Use a transaction that temporarily permits the Neon owner to `SET ROLE portal_app`, then roll the entire transaction back.
 

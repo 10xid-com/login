@@ -11,11 +11,14 @@ import pg from "pg";
  *
  *   2. migration history   the Drizzle journal, row for row, and against the
  *                          migration files in this repository (LF and CRLF)
- *   3. schema              columns, constraints, indexes, functions, triggers,
- *                          enums and sequences in the certified schemas
- *   4. data                exact row counts and a checksum of every row, per table
- *   5. roles / grants      the restricted role's attributes and memberships,
- *                          that it owns nothing, and every table grant to it
+ *   3. schema              the database's encoding and collation; columns,
+ *                          constraints, indexes, functions, triggers, enums and
+ *                          sequences in the certified schemas
+ *   4. data                exact row counts and a checksum of every row, per
+ *                          table, against the source, or row counts against a
+ *                          baseline file (see BASELINE_FILE below)
+ *   5. roles / grants      the restricted role's attributes, the roles granted
+ *                          TO it, that it owns nothing, and every table grant
  *   6. RLS                 enabled/forced flags and every policy
  *   7. tenant context      on the copy, as the restricted role: no rows without
  *                          a tenant, one tenant's rows with one, nothing left
@@ -34,7 +37,18 @@ import pg from "pg";
  *
  * TARGET_APP_URL is optional; without it section 7 is skipped and says so.
  * Object OWNERS are reported but not required to match: a copy restored with
- * --no-owner is owned by whoever restored it, which is expected.
+ * --no-owner is owned by whoever restored it, which is expected. Nor are roles
+ * that are MEMBERS of the restricted role (a managed platform's owner is
+ * routinely given admin over roles it creates): they gain nothing the
+ * restricted role does not already have. They are listed for review.
+ *
+ * Live source or frozen source. Comparing data against a source that is still
+ * taking writes cannot match: the copy is the source as it was when the dump
+ * was taken. At cutover, with writes stopped, compare against the live source
+ * (the default, and the strict check). For a drill against a live source, set
+ * BASELINE_FILE to the row counts recorded when the dump was taken (e.g.
+ * docs/baselines/railway-2026-10-07.json): the copy's counts must equal those,
+ * and differences from the live source are shown as drift, not failures.
  */
 
 const SCHEMAS = ["public", "drizzle"];
@@ -107,6 +121,17 @@ async function catalog(c) {
   const out = {};
 
   out.version = (await q(c, "select current_setting('server_version') as v"))[0].v;
+
+  // Sorting, LIKE ranges and text indexes all follow these, so a copy with a
+  // different collation behaves differently even with identical rows.
+  out.database = await q(
+    c,
+    `select pg_encoding_to_char(d.encoding) as encoding,
+            d.datcollate as collate, d.datctype as ctype,
+            to_jsonb(d)->>'datlocprovider' as provider,
+            coalesce(to_jsonb(d)->>'datlocale', to_jsonb(d)->>'daticulocale') as locale
+       from pg_database d where d.datname = current_database()`,
+  );
 
   out.journal = await q(
     c,
@@ -203,7 +228,7 @@ async function catalog(c) {
     const [row] = await q(
       c,
       `select count(*)::bigint::text as rows,
-              coalesce(md5(string_agg(x::text, E'\\n' order by x::text)), '-') as checksum
+              coalesce(md5(string_agg(x::text, E'\\n' order by x::text collate "C")), '-') as checksum
          from ${ident} x`,
     );
     out.data.push({ schema: t.schema, table: t.table, ...row });
@@ -217,14 +242,31 @@ async function catalog(c) {
     [APP_ROLE],
   );
 
-  out.memberships = await q(
+  // Roles granted TO the restricted role: these are what could widen it.
+  out.memberOf = await q(
     c,
     `select r.rolname as granted_role, m.rolname as member
        from pg_auth_members am
        join pg_roles r on r.oid = am.roleid
        join pg_roles m on m.oid = am.member
-      where m.rolname = $1 or r.rolname = $1
+      where m.rolname = $1
       order by 1, 2`,
+    [APP_ROLE],
+  );
+
+  // Roles that are members OF it: reported, not required to match.
+  out.members = await q(
+    c,
+    `select m.rolname as member, g.rolname as grantor,
+            to_jsonb(am)->>'admin_option' as admin_option,
+            to_jsonb(am)->>'inherit_option' as inherit_option,
+            to_jsonb(am)->>'set_option' as set_option
+       from pg_auth_members am
+       join pg_roles r on r.oid = am.roleid
+       join pg_roles m on m.oid = am.member
+       left join pg_roles g on g.oid = am.grantor
+      where r.rolname = $1
+      order by 1`,
     [APP_ROLE],
   );
 
@@ -369,6 +411,7 @@ async function main() {
   }
 
   section("3. Schema");
+  compare("database encoding and collation", source.database, target.database, () => "database");
   compare("columns", source.columns, target.columns, (r) => `${r.schema}.${r.table}.${r.column}`);
   const withoutParens = (r) => JSON.stringify({ ...r, definition: r.definition.replace(/[()\s]/g, "") });
   compare(
@@ -386,7 +429,26 @@ async function main() {
 
   section("4. Data");
   compare("tables present", source.tables.map((t) => `${t.schema}.${t.table}`), target.tables.map((t) => `${t.schema}.${t.table}`), (r) => r);
-  compare("row counts and row checksums", source.data, target.data, (r) => `${r.schema}.${r.table}`);
+  const baselineFile = process.env.BASELINE_FILE;
+  if (!baselineFile) {
+    compare("row counts and row checksums", source.data, target.data, (r) => `${r.schema}.${r.table}`);
+  } else {
+    const baseline = JSON.parse(readFileSync(baselineFile, "utf8"));
+    const expected = Object.entries(baseline.rowCounts).map(([table, rows]) => ({ table, rows: String(rows) }));
+    const actual = target.data.map((r) => ({ table: `${r.schema}.${r.table}`, rows: r.rows }));
+    compare(`copy row counts against ${baselineFile} (${baseline.capturedAt ?? "baseline"})`, expected, actual, (r) => r.table);
+    const sourceByTable = new Map(source.data.map((r) => [`${r.schema}.${r.table}`, r]));
+    const drift = target.data.filter((r) => {
+      const s = sourceByTable.get(`${r.schema}.${r.table}`);
+      return s && (s.rows !== r.rows || s.checksum !== r.checksum);
+    });
+    if (!drift.length) console.log("  info  no drift: the live source still matches the copy exactly");
+    for (const r of drift) {
+      const s = sourceByTable.get(`${r.schema}.${r.table}`);
+      console.log(`  drift ${r.schema}.${r.table}: live source ${s.rows} rows, copy ${r.rows} rows${s.rows === r.rows ? " (same count, contents changed since the dump)" : ""}`);
+    }
+    if (drift.length) notes.push(`${drift.length} table(s) changed on the live source since the dump (shown as drift)`);
+  }
 
   section(`5. Roles, ownership, grants (${APP_ROLE})`);
   if (!target.role.length) {
@@ -400,7 +462,15 @@ async function main() {
       console.log(`  FAIL  ${APP_ROLE} on the copy: ${bad.join(", ") || ""}${r.rolcanlogin ? "" : " cannot log in"}`);
     } else console.log(`  ok    ${APP_ROLE} on the copy: LOGIN, and none of SUPERUSER/BYPASSRLS/CREATEDB/CREATEROLE/REPLICATION`);
   }
-  compare("role memberships", source.memberships, target.memberships);
+  compare(`roles granted to ${APP_ROLE}`, source.memberOf, target.memberOf);
+  for (const [label, side] of [["source", source], ["copy", target]]) {
+    for (const m of side.members) {
+      console.log(
+        `  info  ${label}: ${m.member} is a member of ${APP_ROLE} (granted by ${m.grantor}; ` +
+          `admin=${m.admin_option}, inherit=${m.inherit_option ?? "n/a"}, set=${m.set_option ?? "n/a"})`,
+      );
+    }
+  }
   if (target.appOwns.length) {
     failures.push("app role owns objects");
     console.log(`  FAIL  ${APP_ROLE} owns ${target.appOwns.length} object(s) on the copy, e.g. ${target.appOwns[0].schema}.${target.appOwns[0].name}`);
