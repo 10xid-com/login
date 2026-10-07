@@ -57,14 +57,23 @@ PostgreSQL logical dumps do **not** recreate cluster roles. Required roles must 
 
 ## 2. Prepare an isolated Neon target
 
-Create a separate empty database **with the same encoding and collation as the source**. Railway's is `UTF8` with `en_US.utf8` collation and ctype (2026-10-07); a database created with Neon's defaults gets `C.UTF-8`, which sorts text differently, so the copy would behave differently even with identical rows. For example:
+Create a separate empty database **with the same encoding, locale provider and collation as the source**. Railway's is `UTF8`, provider `libc`, with `en_US.utf8` collation and ctype (2026-10-07). Neon's `template0` uses the `builtin` provider (`C.UTF-8`), and a new database inherits that provider unless `locale_provider` is given. With the builtin provider, `lc_collate` does not decide sorting, so naming `en_US` alone is not enough (the 2026-10-07 rerun did exactly that, and sorted `A` before `a`):
 
 ```sql
 create database railway_restore_test
-  template template0 encoding 'UTF8' lc_collate 'en_US.UTF-8' lc_ctype 'en_US.UTF-8';
+  template template0 encoding 'UTF8'
+  locale_provider libc lc_collate 'en_US.utf8' lc_ctype 'en_US.utf8';
 ```
 
-If the platform refuses that locale, stop and decide explicitly, not by default. Accepting a different collation changes the app's sort order, and is a decision for the owner. The certifier's "database encoding and collation" check reports exactly what the copy got.
+Check it before restoring. Expect `c | en_US.utf8 | en_US.utf8 | (null)`, then `{-,1,a,A,z,Z}`:
+
+```sql
+select datlocprovider, datcollate, datctype, datlocale
+  from pg_database where datname = current_database();
+select array_agg(x order by x) from unnest(array['-','1','a','A','z','Z']) x;
+```
+
+If the platform refuses that locale or provider, stop and decide explicitly, not by default. Accepting a different collation changes the app's sort order, and is a decision for the owner. The certifier's "database encoding and collation" check compares the encoding, provider and locale (treating `en_US.UTF-8` and `en_US.utf8` as the same name, as glibc does) and the order of a fixed sample of strings. It prints the collation library versions for information.
 
 Before restore, verify the persistent application role:
 

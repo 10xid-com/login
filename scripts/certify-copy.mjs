@@ -123,15 +123,31 @@ async function catalog(c) {
   out.version = (await q(c, "select current_setting('server_version') as v"))[0].v;
 
   // Sorting, LIKE ranges and text indexes all follow these, so a copy with a
-  // different collation behaves differently even with identical rows.
-  out.database = await q(
+  // different collation behaves differently even with identical rows. The
+  // provider decides which settings count: with the builtin provider (Neon's
+  // template0 default) lc_collate is ignored for sorting, so a matching
+  // lc_collate alone proves nothing. `sorted` is the behaviour itself.
+  const [db] = await q(
     c,
     `select pg_encoding_to_char(d.encoding) as encoding,
             d.datcollate as collate, d.datctype as ctype,
             to_jsonb(d)->>'datlocprovider' as provider,
-            coalesce(to_jsonb(d)->>'datlocale', to_jsonb(d)->>'daticulocale') as locale
+            coalesce(to_jsonb(d)->>'datlocale', to_jsonb(d)->>'daticulocale') as locale,
+            d.datcollversion as version
        from pg_database d where d.datname = current_database()`,
   );
+  const [{ sorted }] = await q(
+    c,
+    `select array_agg(x order by x) as sorted
+       from unnest(array['-', '1', 'a', 'A', 'z', 'Z', 'a b', 'a-b', 'ab', 'e', 'é', 'f']) x`,
+  );
+  out.collationVersion = db.version;
+  delete db.version;
+  // glibc treats "en_US.UTF-8" and "en_US.utf8" as the same locale: it
+  // lowercases the codeset and drops its punctuation.
+  const glibcName = (l) =>
+    l && l.replace(/\.([^@]*)/, (_, set) => "." + set.toLowerCase().replace(/[^a-z0-9]/g, ""));
+  out.database = [{ ...db, collate: glibcName(db.collate), ctype: glibcName(db.ctype), sorted }];
 
   out.journal = await q(
     c,
@@ -412,6 +428,12 @@ async function main() {
 
   section("3. Schema");
   compare("database encoding and collation", source.database, target.database, () => "database");
+  if (source.collationVersion !== target.collationVersion) {
+    console.log(
+      `  info  collation library version: source ${source.collationVersion ?? "-"}, ` +
+        `copy ${target.collationVersion ?? "-"} (the sorting sample above is what is compared)`,
+    );
+  }
   compare("columns", source.columns, target.columns, (r) => `${r.schema}.${r.table}.${r.column}`);
   const withoutParens = (r) => JSON.stringify({ ...r, definition: r.definition.replace(/[()\s]/g, "") });
   compare(

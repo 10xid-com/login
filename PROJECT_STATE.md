@@ -113,7 +113,22 @@ Run by Codex on Paolo's machine from `main` at `9d5efc3`. Railway was read only 
 - **Real difference found: collation.** The Neon database was created with `C.UTF-8`; Railway's is `en_US.utf8`. Sorting differs between them, so the next drill creates the database with matching collation (runbook §2). If Neon refuses `en_US.UTF-8`, accepting a different collation is a decision for Paolo.
 - **Tests: 174 passed, 22 failed** (`api-keys` 13, `workspace-isolation` 9; NOT NULL on `created_by`), on disposable branch `restore-drill-tests` (`br-damp-snow-akxc4m0t`, since deleted). Cause: the instructions omitted `npm run db:seed`. The tests look up seeded fixture users that a production copy doesn't have, while CI seeds first. Not a database fault.
 - **Fixed since** (PR after #19): the certifier orders checksums `COLLATE "C"`, checks the database's encoding and collation, compares only roles granted *to* `portal_app` (and lists members of it), and has a `BASELINE_FILE` drill mode (`docs/baselines/railway-2026-10-07.json`). The runbook now covers matching collation, baseline mode, and seeding before tests. All were re-tested locally.
-- **Re-run needed:** a new drill database with matching collation; certify with `BASELINE_FILE`; `npm run db:seed && npm test` on a disposable branch. The retained branch `restore-drill-2026-10-07` can be deleted once the re-run is done.
+- **Re-run needed:** a new drill database with matching collation; certify with `BASELINE_FILE`; `npm run db:seed && npm test` on a disposable branch. The retained branch `restore-drill-2026-10-07` can be deleted once the re-run is done. *Done; see the rerun below.*
+
+## Restore drill rerun — 2026-10-07 (restore OK, tests pass, NOT CERTIFIED: locale provider)
+Run by Codex on Paolo's machine from `main` at `caadd66` (Node 22.22.3, PostgreSQL client 18.6). Railway was read only, through a tunnel that was closed afterwards. No Railway data, app variables, DNS or code were changed. Full outputs are kept locally with the dump.
+
+- **Restore: passed.** Dump SHA-256 verified first (`02ccef65…`, 186,470 bytes). The target was new branch `restore-drill-2026-10-07-rerun` (`br-aged-fire-akrrt3rm`, retained) and a new empty database of the same name (owner `neondb_owner`). The inherited `neondb` and `railway_restore_test` were dropped on that branch only. `portal_app` was verified with LOGIN and none of SUPERUSER/BYPASSRLS/CREATEDB/CREATEROLE/REPLICATION. `pg_restore --no-owner --exit-on-error` exited 0.
+- **Certification (`BASELINE_FILE` mode): NOT CERTIFIED, 1 failure: database encoding and collation.** Everything else passed:
+  - journal (21 triples; all 21 match the repository's LF hashes on both sides);
+  - columns 332, constraints 411 (`conversations_branch_sane` again differs only in parentheses; reviewed), indexes 107, functions 12, triggers 12, enums 16, sequences 4;
+  - all 36 table counts equal the baseline;
+  - `portal_app` posture, no roles granted to it, 110 grants, 36 RLS flags, 27 policies, and all three tenant-context checks.
+  - Five tables show live-source drift since the dump (`act_as_grants` 3/2, `sessions` 18/17, `sso_tickets` 4/3, `staff_grants` 21/19, `organization_domains` contents). These are sign-ins and deploys after the dump; the copy matches the dump.
+- **The failure is real, and the runbook caused it.** The database was created with `lc_collate 'en_US.UTF-8'` but no `locale_provider`, so it kept `template0`'s builtin provider (`C.UTF-8`), and `lc_collate` does not decide sorting under that provider. Measured: Railway libc `en_US.utf8` (glibc 2.41) sorts `-, 1, a, A, z, Z`; the copy (builtin, `C.UTF-8`) sorts `-, 1, A, Z, a, z`. Neon accepted the `en_US.UTF-8` locale name, so `locale_provider libc` with that locale is expected to work.
+- **Tests: 196 passed, 0 failed** (13 files, 120 s), after `npm run db:seed` on disposable branch `restore-drill-tests-rerun` (`br-polished-poetry-ako3g4od`, since deleted). The parent was checked afterwards: all 36 counts still equal the baseline, and it has no seeded users.
+- **Cleanup:** the old `restore-drill-2026-10-07` branch was deleted. Neon branches are now `main`, `railway-pitr-drill`, `railway-restore-drill` and `restore-drill-2026-10-07-rerun`. The last is a rehearsal result, not a cutover target, and can be deleted once a certified drill exists.
+- **Fixed since:** runbook §2 now creates the database with `locale_provider libc lc_collate 'en_US.utf8' lc_ctype 'en_US.utf8'` and checks provider and sort order before restoring. The certifier now compares a sample sort order as well as the settings, treats `en_US.UTF-8` and `en_US.utf8` as the same name, and prints the collation library versions. Tested locally: a spelling-only difference passes, and an ICU `en-US` database fails on both provider and order.
 
 ## Blockers
 - Neon target currently contains migration-authored application rows; source data must not be imported on top of them until a safe reset/import sequence is selected.
@@ -151,5 +166,5 @@ The copied Neon database must pass:
 8. application/database isolation tests.
 
 ## Next action
-- Re-run the restore drill (see "Restore drill — 2026-10-07"): a new Neon database with collation matching Railway's (`en_US.UTF-8`), restore the 2026-10-07 dump, certify with `BASELINE_FILE=docs/baselines/railway-2026-10-07.json`, then `npm run db:seed && npm test` on a disposable branch. Delete the retained `restore-drill-2026-10-07` branch afterwards.
+- Certify the restore (see "Restore drill rerun — 2026-10-07"). Create a new Neon database with `locale_provider libc` and `en_US.utf8` (runbook §2) and confirm the provider and sort order before restoring. Then restore the 2026-10-07 dump and certify with `BASELINE_FILE=docs/baselines/railway-2026-10-07.json`. Tests already pass on this dump, so rerun them only if the restore differs. If Neon refuses libc `en_US.utf8`, accepting another collation is a decision for Paolo. Delete `restore-drill-2026-10-07-rerun` afterwards.
 - Decide whether `database-security` becomes a required check in branch protection (PR #8 is merged; the protection setting is unverified).
