@@ -1,19 +1,27 @@
 import pg from "pg";
 
 /**
- * Confirm or reject the WorkOS binding requests of accounts that existed
- * before WorkOS.
+ * Confirm or reject the binding requests of accounts that existed before the
+ * self-hosted sign-in (Better Auth, 0022) — and, for the same operators, the
+ * two things a person cannot do for themselves once their phone is gone.
  *
  *   node scripts/identity-bindings.mjs list
  *   node scripts/identity-bindings.mjs confirm <request id> --operator "Full Name"
  *   node scripts/identity-bindings.mjs reject  <request id> --operator "Full Name"
+ *   node scripts/identity-bindings.mjs reset-authenticator <email> --operator "Full Name"
+ *   node scripts/identity-bindings.mjs sign-out-everywhere <email> --operator "Full Name"
  *
- * The first time such an account signs in through WorkOS with a verified
- * address, the portal records a request in identity_bindings and lets the
- * person no further. This is the answer. It connects as the OWNER
- * (DATABASE_URL), because the 0021 trigger lets nobody else set
- * users.workos_user_id on an existing account — the application can ask, and
- * only an operator can answer.
+ * The first time such an account signs in with a verified address and passes
+ * the authenticator, the login host records a request in identity_bindings and
+ * lets the person no further. This is the answer. It connects as the OWNER
+ * (DATABASE_URL), because the 0022 trigger lets nobody else set
+ * users.auth_user_id on an existing account — the application can ask, and
+ * only an operator can answer. (Requests from the never-deployed WorkOS
+ * integration, workos_user_id, are handled the same way.)
+ *
+ * reset-authenticator removes the identity's authenticator and recovery codes
+ * and ends its sessions; the person sets up a new one at their next sign-in.
+ * Do it only after confirming who is asking, by a channel other than email.
  *
  * Before confirming, check with the person by a channel other than this
  * sign-in (a call to a number already on file, say) that they are the one who
@@ -35,7 +43,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function usage(message) {
   if (message) console.error(message);
   console.error(
-    'Usage: identity-bindings.mjs list | confirm <id> --operator "Name" | reject <id> --operator "Name"',
+    'Usage: identity-bindings.mjs list | confirm <id> --operator "Name" | reject <id> --operator "Name"\n' +
+      '       | reset-authenticator <email> --operator "Name" | sign-out-everywhere <email> --operator "Name"',
   );
   process.exit(1);
 }
@@ -50,6 +59,10 @@ try {
     if (!UUID.test(id ?? "")) usage("A request id is required.");
     if (operator.length === 0) usage("Name the operator with --operator.");
     await decide(command, id, operator);
+  } else if (command === "reset-authenticator" || command === "sign-out-everywhere") {
+    if (!id || !id.includes("@")) usage("An email address is required.");
+    if (operator.length === 0) usage("Name the operator with --operator.");
+    await recover(command, id.trim().toLowerCase(), operator);
   } else {
     usage();
   }
@@ -62,7 +75,7 @@ try {
 
 async function list() {
   const { rows } = await client.query(`
-    select b.id, b.email, b.workos_user_id, b.requested_at,
+    select b.id, b.email, b.workos_user_id, b.auth_user_id, b.requested_at,
            u.email as account_email, u.full_name,
            coalesce(
              (select string_agg(o.name || ' (' || m.role || ')', ', ' order by o.name)
@@ -83,7 +96,7 @@ async function list() {
     console.log(
       [
         `${r.id}`,
-        `  signed in as  ${r.email}  (WorkOS ${r.workos_user_id})`,
+        `  signed in as  ${r.email}  (${subjectLabel(r)})`,
         `  account       ${r.account_email}${r.full_name ? ` — ${r.full_name}` : ""}`,
         `  businesses    ${r.businesses}`,
         `  requested     ${r.requested_at.toISOString()}`,
@@ -96,7 +109,7 @@ async function decide(command, requestId, decidedBy) {
   await client.query("begin");
   try {
     const { rows } = await client.query(
-      `select b.*, u.workos_user_id as bound_to, u.deleted_at
+      `select b.*, u.workos_user_id as bound_workos, u.auth_user_id as bound_auth, u.deleted_at
          from identity_bindings b join users u on u.id = b.user_id
         where b.id = $1
         for update of b, u`,
@@ -110,8 +123,11 @@ async function decide(command, requestId, decidedBy) {
 
     if (command === "confirm") {
       if (request.deleted_at) throw new Error("The account has been deleted.");
-      if (request.bound_to) {
-        throw new Error(`The account is already bound to ${request.bound_to}.`);
+      const column = request.auth_user_id ? "auth_user_id" : "workos_user_id";
+      const subject = request.auth_user_id ?? request.workos_user_id;
+      const boundTo = request.auth_user_id ? request.bound_auth : request.bound_workos;
+      if (boundTo) {
+        throw new Error(`The account is already bound to ${boundTo}.`);
       }
 
       // The address must still belong to the account: the primary, or a
@@ -126,17 +142,14 @@ async function decide(command, requestId, decidedBy) {
         throw new Error(`${request.email} no longer belongs to this account.`);
       }
 
-      const taken = await client.query(
-        "select id from users where workos_user_id = $1",
-        [request.workos_user_id],
-      );
+      const taken = await client.query(`select id from users where ${column} = $1`, [subject]);
       if (taken.rowCount > 0) {
-        throw new Error("That WorkOS user is already bound to another account.");
+        throw new Error("That sign-in is already bound to another account.");
       }
 
       await client.query(
-        "update users set workos_user_id = $2, updated_at = now() where id = $1",
-        [request.user_id, request.workos_user_id],
+        `update users set ${column} = $2, updated_at = now() where id = $1`,
+        [request.user_id, subject],
       );
     }
 
@@ -148,7 +161,42 @@ async function decide(command, requestId, decidedBy) {
     );
     await client.query("commit");
     console.log(
-      `${command === "confirm" ? "Confirmed" : "Rejected"}: ${request.email} (${request.workos_user_id}), by ${decidedBy}.`,
+      `${command === "confirm" ? "Confirmed" : "Rejected"}: ${request.email} (${subjectLabel(request)}), by ${decidedBy}.`,
+    );
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
+}
+
+function subjectLabel(r) {
+  return r.auth_user_id ? `sign-in ${r.auth_user_id}` : `WorkOS ${r.workos_user_id}`;
+}
+
+async function recover(command, email, by) {
+  await client.query("begin");
+  try {
+    const { rows } = await client.query("select id from auth_users where email = $1 for update", [email]);
+    const identity = rows[0];
+    if (!identity) throw new Error(`No sign-in exists for ${email}.`);
+    let factors = 0;
+    if (command === "reset-authenticator") {
+      factors = (await client.query("delete from auth_two_factors where user_id = $1", [identity.id])).rowCount;
+    }
+    const sessions = (await client.query("delete from auth_sessions where user_id = $1", [identity.id])).rowCount;
+    // The portal sessions handed over from those sign-ins end with them.
+    const portal = (
+      await client.query(
+        `update sessions set revoked_at = now()
+          where revoked_at is null
+            and user_id = (select id from users where auth_user_id = $1)`,
+        [identity.id],
+      )
+    ).rowCount;
+    await client.query("commit");
+    console.log(
+      `${command === "reset-authenticator" ? `Authenticator removed (${factors}); ` : ""}` +
+        `${sessions} sign-in and ${portal} portal sessions ended for ${email}, by ${by}.`,
     );
   } catch (error) {
     await client.query("rollback");

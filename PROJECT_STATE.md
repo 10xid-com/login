@@ -4,9 +4,9 @@
 Phase 1 — Platform Hardening
 
 ## Current action
-WorkOS sign-in foundation built on branch `claude/great-ptolemy-sd6k4e` (see "WorkOS sign-in foundation" below); awaiting Paolo's review and the WorkOS setup before anything merges.
+Self-hosted sign-in (Better Auth) built on branch `claude/great-ptolemy-sd6k4e` in both repositories, replacing the never-deployed WorkOS integration (app PR #2). Not merged, not deployed; no production variables or DNS changed. Design, variables, provider setup, deployment order and rollback: `docs/better-auth-cutover.md`. Awaiting review, Railway variables (`BETTER_AUTH_SECRET`, `PORTAL_AUTH_PASSWORD`, `AUTH_DATABASE_URL` on login; `PORTAL_HOST`, `PRIMARY_HOST` on app) and optional Google/Microsoft credentials. Open decision: removing the legacy emailed-code sign-in files and their tests (left untouched; `test/act-as.test.ts` pins the old handoff's source and fails).
 
-Previously: Phase 1 / Enforced CI/security gates — PR #8 (`ci/database-security`) was merged on 2026-10-06 by 0TBS; the `database-security` check now runs on every pull request alongside `quality`. Whether it has been added to branch protection as a required check has not been verified since.
+Previously: WorkOS sign-in foundation (superseded). Phase 1 / Enforced CI/security gates — PR #8 (`ci/database-security`) merged on 2026-10-06.
 
 ## Last passed checkpoint
 Phase 1 CI enforcement checkpoint: `10xid-com/login` was made public by explicit user choice with no billing change. Classic branch protection rule `84348218` applies to `main` (1 branch), requires a pull request before merging, and requires status check `quality` with updates accepted specifically from GitHub Actions. No database-backed checks or extra review restrictions are required. Approvals are off; administrator bypass remains allowed (`Do not allow bypassing` is unchecked), so do not claim universal/admin enforcement. Force pushes and branch deletions remain disallowed. No production app, DNS, Railway, or Neon changes were made.

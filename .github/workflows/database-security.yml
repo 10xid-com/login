@@ -32,6 +32,10 @@ jobs:
       DATABASE_URL: postgresql://ci_owner:ci-owner-local-only@127.0.0.1:5432/portal_ci
       DATABASE_APP_URL: postgresql://portal_app:ci-app-local-only@127.0.0.1:5432/portal_ci
       PORTAL_APP_PASSWORD: ci-app-local-only
+      # The sign-in engine's restricted role (0022) and a throwaway secret.
+      AUTH_DATABASE_URL: postgresql://portal_auth:ci-auth-local-only@127.0.0.1:5432/portal_ci
+      PORTAL_AUTH_PASSWORD: ci-auth-local-only
+      BETTER_AUTH_SECRET: ci-only-better-auth-secret-not-used-anywhere-else
 
     steps:
       - name: Checkout

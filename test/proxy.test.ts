@@ -66,7 +66,7 @@ describe("with PORTAL_HOST: the login host keeps only sign-in", () => {
 
   test("a signed-out visit is asked to sign in first, keeping the path", () => {
     expect(target(visit(LOGIN, "/jobs/123"))).toBe(
-      `https://${LOGIN}/auth/login?next=%2Fjobs%2F123`,
+      `https://${LOGIN}/auth/sign-in?next=%2Fjobs%2F123`,
     );
   });
 
@@ -130,5 +130,14 @@ describe("sign-in screens exist on the login host only", () => {
   test("with no PRIMARY_HOST at all, nothing is redirected", () => {
     vi.stubEnv("PRIMARY_HOST", "");
     expect(target(visit(PORTAL, "/auth/login"))).toBeNull();
+  });
+});
+
+describe("the healthcheck", () => {
+  test("is answered on every host, signed in or not, and never redirected", () => {
+    vi.stubEnv("PORTAL_HOST", PORTAL);
+    for (const host of [LOGIN, PORTAL, CLIENT]) {
+      expect(target(visit(host, "/healthz"))).toBeNull();
+    }
   });
 });

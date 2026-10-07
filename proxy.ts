@@ -21,7 +21,13 @@ import { NextResponse, type NextRequest } from "next/server";
  * In other words: this is a convenience that saves a redirect, not a gate.
  */
 
-const SESSION_COOKIES = ["__Host-portal_session", "portal_session"];
+const SESSION_COOKIES = [
+  "__Host-portal_session",
+  "portal_session",
+  // Better Auth's, on the login host (lib/auth/auth.ts: cookiePrefix "10xid").
+  "__Secure-10xid.session_token",
+  "10xid.session_token",
+];
 
 /**
  * The screens where somebody proves who they are. Sign-in happens on the login
@@ -32,7 +38,17 @@ const SESSION_COOKIES = ["__Host-portal_session", "portal_session"];
  * The second-factor and recovery-code screens are not in this list: they act on
  * the session of the host they are on, so they have to stay where they are.
  */
-const SIGN_IN_PAGES = new Set(["/auth/login", "/auth/signup", "/auth/verify"]);
+const SIGN_IN_PAGES = new Set([
+  "/auth/login",
+  "/auth/signup",
+  "/auth/verify",
+  "/auth/sign-in",
+  "/auth/sign-in/code",
+  "/auth/sign-up",
+  "/auth/verify-email",
+  "/auth/forgot-password",
+  "/auth/reset-password",
+]);
 
 /** The same rule as originFor() in lib/auth/sso, which is server-only. */
 function originFor(host: string): string {
@@ -53,6 +69,9 @@ export function proxy(request: NextRequest) {
   // far more confusing failure than a plain 401. They answer on every host.
   if (pathname.startsWith("/api/")) return NextResponse.next();
 
+  // The platform's healthcheck: answered on every host, never redirected.
+  if (pathname === "/healthz") return NextResponse.next();
+
   if (primary && host !== primary && SIGN_IN_PAGES.has(pathname)) {
     return NextResponse.redirect(
       new URL(`${pathname}${search}`, originFor(primary)),
@@ -72,7 +91,7 @@ export function proxy(request: NextRequest) {
   if (primary && portal && portal !== primary && host === primary) {
     if (!hasSession) {
       const login = request.nextUrl.clone();
-      login.pathname = "/auth/login";
+      login.pathname = "/auth/sign-in";
       login.search = "";
       login.searchParams.set("next", `${pathname}${search}`);
       return NextResponse.redirect(login);

@@ -121,6 +121,7 @@ try {
         "so the application will not be able to connect.",
     );
   }
+  await configureAuthRole(pool);
   await bootstrap(pool);
   await registerClientDomains(pool);
   await registerPortalHost(pool);
@@ -130,6 +131,39 @@ try {
   process.exitCode = 1;
 } finally {
   await pool.end();
+}
+
+/**
+ * Give the sign-in role (0022) its login and password, the same way as
+ * portal_app above: from the environment, through a session setting, quoted by
+ * the server. The login host's Better Auth connection (AUTH_DATABASE_URL) uses
+ * it; nothing else does.
+ */
+async function configureAuthRole(pool) {
+  const authPassword = process.env.PORTAL_AUTH_PASSWORD;
+  if (!authPassword) {
+    console.warn(
+      "PORTAL_AUTH_PASSWORD is not set — the sign-in role has no password, " +
+        "so the login host's Better Auth connection will not be able to connect.",
+    );
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("SELECT set_config('portal.auth_password', $1, false)", [authPassword]);
+    await client.query(
+      `DO $$ BEGIN
+         EXECUTE format(
+           'ALTER ROLE portal_auth WITH LOGIN NOBYPASSRLS PASSWORD %L',
+           current_setting('portal.auth_password')
+         );
+       END $$;`,
+    );
+    await client.query("SELECT set_config('portal.auth_password', '', false)");
+    console.log("Sign-in role configured.");
+  } finally {
+    client.release();
+  }
 }
 
 /**

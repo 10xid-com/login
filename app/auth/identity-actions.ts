@@ -1,0 +1,415 @@
+"use server";
+
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { APIError } from "better-auth/api";
+import { z } from "zod";
+import { configuredProviders, getAuth, type SocialProvider } from "@/lib/auth/auth";
+import { forgetRecoveryCodes, showRecoveryCodesOnce } from "@/lib/auth/recovery-codes-once";
+import {
+  assertLoginOrigin,
+  getLoginSession,
+  nextQuery,
+  resolveAccount,
+  safeNext,
+} from "@/lib/auth/login";
+import {
+  revokePortalSessionsForUser,
+  revokePortalSessionsFromAuthSession,
+  userByAuthUserId,
+} from "@/lib/db/accounts";
+import { consumeTicketsForAuthSession } from "@/lib/db/identity";
+import { authDb } from "@/lib/db/auth-connection";
+import { authUsers } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
+
+/**
+ * Every step of signing in on login.10xid.com, as server actions.
+ *
+ * Each one checks the request came from this host's own pages
+ * (assertLoginOrigin), then calls Better Auth in-process, so its cookies are
+ * set on the response by the nextCookies plugin. Errors come back to the page
+ * as a short code in the query string; the pages turn codes into sentences, and
+ * never say whether an address has an account.
+ */
+
+const email = z.string().trim().toLowerCase().email().max(320);
+const password = z.string().min(12).max(128);
+const otp = z.string().trim().regex(/^\d{6}$/);
+const totp = z.string().trim().regex(/^\d{6}$/);
+const recovery = z.string().trim().toLowerCase().regex(/^[a-z0-9]{5}-?[a-z0-9]{5}$/);
+
+type Failure = { ok: false; code: string };
+type Result<T> = { ok: true; value: T } | Failure;
+
+async function call<T>(fn: (h: Headers) => Promise<T>): Promise<Result<T>> {
+  try {
+    return { ok: true, value: await fn(await headers()) };
+  } catch (error) {
+    if (error instanceof APIError) {
+      const code = (error.body as { code?: string } | undefined)?.code ?? String(error.status);
+      return { ok: false, code };
+    }
+    throw error;
+  }
+}
+
+function to(path: string, params: Record<string, string | undefined>): never {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value && !(key === "next" && value === "/")) query.set(key, value);
+  }
+  const qs = query.toString();
+  redirect(qs ? `${path}?${qs}` : path);
+}
+
+/* ------------------------------------------------------------------ */
+/* First factor                                                        */
+/* ------------------------------------------------------------------ */
+
+export async function signInWithPasswordAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const address = email.safeParse(form.get("email"));
+  const secret = z.string().min(1).max(128).safeParse(form.get("password"));
+  if (!address.success || !secret.success) to("/auth/sign-in", { error: "invalid", next });
+
+  const result = await call((h) =>
+    getAuth().api.signInEmail({ body: { email: address.data, password: secret.data }, headers: h }),
+  );
+  if (!result.ok) {
+    if (result.code === "EMAIL_NOT_VERIFIED") {
+      to("/auth/verify-email", { email: address.data, next, notice: "sent" });
+    }
+    to("/auth/sign-in", { error: result.code === "TOO_MANY_REQUESTS" || result.code === "429" ? "rate" : "invalid", next });
+  }
+  to("/auth/mfa", { next });
+}
+
+export async function requestSignInCodeAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const address = email.safeParse(form.get("email"));
+  if (!address.success) to("/auth/sign-in/code", { error: "email", next });
+
+  // The same answer whether or not the address can sign in: an identity is
+  // only ever created for an invited address (lib/auth/auth.ts), and the page
+  // does not say which it was.
+  const result = await call((h) =>
+    getAuth().api.sendVerificationOTP({ body: { email: address.data, type: "sign-in" }, headers: h }),
+  );
+  if (!result.ok && (result.code === "TOO_MANY_REQUESTS" || result.code === "429")) {
+    to("/auth/sign-in/code", { error: "rate", next });
+  }
+  to("/auth/sign-in/code", { email: address.data, next });
+}
+
+export async function signInWithCodeAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const address = email.safeParse(form.get("email"));
+  const code = otp.safeParse(form.get("code"));
+  if (!address.success) to("/auth/sign-in/code", { error: "email", next });
+  if (!code.success) to("/auth/sign-in/code", { email: address.data, error: "code", next });
+
+  const result = await call((h) =>
+    getAuth().api.signInEmailOTP({ body: { email: address.data, otp: code.data }, headers: h }),
+  );
+  if (!result.ok) {
+    // NOT_INVITED lands here too, worded the same as a wrong code.
+    to("/auth/sign-in/code", { email: address.data, error: "code", next });
+  }
+  to("/auth/mfa", { next });
+}
+
+export async function signUpAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const address = email.safeParse(form.get("email"));
+  const name = z.string().trim().min(1).max(120).safeParse(form.get("name"));
+  const secret = password.safeParse(form.get("password"));
+  if (!address.success || !name.success) to("/auth/sign-up", { error: "invalid", next });
+  if (!secret.success) to("/auth/sign-up", { error: "password", next });
+
+  const result = await call((h) =>
+    getAuth().api.signUpEmail({
+      body: { email: address.data, password: secret.data, name: name.data },
+      headers: h,
+    }),
+  );
+  if (!result.ok && (result.code === "PASSWORD_TOO_SHORT" || result.code === "PASSWORD_TOO_LONG")) {
+    to("/auth/sign-up", { error: "password", next });
+  }
+  // Invited or not, new or not: the same next screen.
+  to("/auth/verify-email", { email: address.data, next, notice: "sent" });
+}
+
+export async function sendVerificationCodeAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const address = email.safeParse(form.get("email"));
+  if (!address.success) to("/auth/verify-email", { error: "email", next });
+  await call((h) =>
+    getAuth().api.sendVerificationOTP({
+      body: { email: address.data, type: "email-verification" },
+      headers: h,
+    }),
+  );
+  to("/auth/verify-email", { email: address.data, next, notice: "sent" });
+}
+
+export async function verifyEmailAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const address = email.safeParse(form.get("email"));
+  const code = otp.safeParse(form.get("code"));
+  if (!address.success) to("/auth/verify-email", { error: "email", next });
+  if (!code.success) to("/auth/verify-email", { email: address.data, error: "code", next });
+
+  const result = await call((h) =>
+    getAuth().api.verifyEmailOTP({ body: { email: address.data, otp: code.data }, headers: h }),
+  );
+  if (!result.ok) to("/auth/verify-email", { email: address.data, error: "code", next });
+
+  // Verifying from a signed-in session (a provider sign-in) carries on to the
+  // access check; otherwise the person signs in now that the address counts.
+  if (await getLoginSession()) to("/auth/access", { next });
+  to("/auth/sign-in", { notice: "verified", email: address.data, next });
+}
+
+export async function requestPasswordResetAction(form: FormData) {
+  await assertLoginOrigin();
+  const address = email.safeParse(form.get("email"));
+  if (!address.success) to("/auth/forgot-password", { error: "email" });
+  const result = await call((h) =>
+    getAuth().api.requestPasswordResetEmailOTP({ body: { email: address.data }, headers: h }),
+  );
+  if (!result.ok && (result.code === "TOO_MANY_REQUESTS" || result.code === "429")) {
+    to("/auth/forgot-password", { error: "rate" });
+  }
+  to("/auth/reset-password", { email: address.data });
+}
+
+export async function resetPasswordAction(form: FormData) {
+  await assertLoginOrigin();
+  const address = email.safeParse(form.get("email"));
+  const code = otp.safeParse(form.get("code"));
+  const secret = password.safeParse(form.get("password"));
+  if (!address.success) to("/auth/forgot-password", { error: "email" });
+  if (!code.success) to("/auth/reset-password", { email: address.data, error: "code" });
+  if (!secret.success) to("/auth/reset-password", { email: address.data, error: "password" });
+
+  const result = await call((h) =>
+    getAuth().api.resetPasswordEmailOTP({
+      body: { email: address.data, otp: code.data, password: secret.data },
+      headers: h,
+    }),
+  );
+  if (!result.ok) to("/auth/reset-password", { email: address.data, error: "code" });
+  // Better Auth has removed every sign-in session of this identity
+  // (revokeSessionsOnPasswordReset); the portal sessions go too, at once.
+  await endPortalAccessForAddress(address.data);
+  to("/auth/sign-in", { notice: "reset", email: address.data });
+}
+
+export async function signInWithProviderAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const provider = form.get("provider");
+  if (!configuredProviders().includes(provider as SocialProvider)) to("/auth/sign-in", { error: "invalid", next });
+
+  const result = await call((h) =>
+    getAuth().api.signInSocial({
+      body: {
+        provider: provider as SocialProvider,
+        callbackURL: `/auth/mfa${nextQuery(next)}`,
+        errorCallbackURL: `/auth/sign-in${nextQuery(next)}`,
+        disableRedirect: true,
+      },
+      headers: h,
+    }),
+  );
+  if (!result.ok || !result.value.url) to("/auth/sign-in", { error: "provider", next });
+  redirect(result.value.url);
+}
+
+/* ------------------------------------------------------------------ */
+/* The authenticator                                                   */
+/* ------------------------------------------------------------------ */
+
+export async function startEnrollmentAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const result = await call((h) => getAuth().api.mfaStartEnrollment({ headers: h }));
+  if (!result.ok) {
+    if (result.code === "EMAIL_NOT_VERIFIED") to("/auth/access", { next });
+    if (result.code === "MFA_ALREADY_ENROLLED") to("/auth/mfa", { next });
+    to("/auth/sign-in", { next });
+  }
+  to("/auth/mfa/setup", { next });
+}
+
+export async function confirmEnrollmentAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const code = totp.safeParse(form.get("code"));
+  if (!code.success) to("/auth/mfa/setup", { error: "code", next });
+  const result = await call((h) =>
+    getAuth().api.mfaConfirmEnrollment({ body: { code: code.data }, headers: h }),
+  );
+  if (!result.ok) to("/auth/mfa/setup", { error: result.code === "MFA_INVALID_CODE" ? "code" : "expired", next });
+  await settleAccount();
+  await showRecoveryCodesOnce(result.value.recoveryCodes);
+  to("/auth/mfa/recovery-codes", { next });
+}
+
+export async function verifyAuthenticatorAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const code = totp.safeParse(form.get("code"));
+  if (!code.success) to("/auth/mfa", { error: "code", next });
+  const result = await call((h) => getAuth().api.mfaVerify({ body: { code: code.data }, headers: h }));
+  if (!result.ok) {
+    if (result.code === "MFA_LOCKED") to("/auth/mfa", { error: "locked", next });
+    if (result.code === "MFA_NOT_ENROLLED") to("/auth/mfa/setup", { next });
+    if (result.code === "UNAUTHORIZED" || result.code === "401") to("/auth/sign-in", { next });
+    to("/auth/mfa", { error: "code", next });
+  }
+  await finish(next);
+}
+
+export async function recoverWithCodeAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const code = recovery.safeParse(form.get("code"));
+  if (!code.success) to("/auth/mfa/recover", { error: "code", next });
+  const result = await call((h) => getAuth().api.mfaRecover({ body: { code: code.data }, headers: h }));
+  if (!result.ok) {
+    to("/auth/mfa/recover", { error: result.code === "MFA_LOCKED" ? "locked" : "code", next });
+  }
+  await settleAccount();
+  // Straight to the account page: a recovery code usually means the phone is
+  // gone, and the authenticator should be replaced before anything else.
+  to("/auth/account", { notice: "recovered", left: String(result.value.remaining ?? 0) });
+}
+
+export async function regenerateRecoveryCodesAction() {
+  await assertLoginOrigin();
+  const result = await call((h) => getAuth().api.mfaRegenerateRecoveryCodes({ headers: h }));
+  if (!result.ok) to("/auth/account", { error: result.code === "MFA_NOT_FRESH" ? "fresh" : "failed" });
+  await showRecoveryCodesOnce(result.value.recoveryCodes);
+  to("/auth/mfa/recovery-codes", { next: "/auth/account" });
+}
+
+/** "I have saved them": forget the codes and carry on. */
+export async function recoveryCodesSavedAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  await forgetRecoveryCodes();
+  if (next !== "/") redirect(next);
+  await finish(next);
+}
+
+export async function resetAuthenticatorAction() {
+  await assertLoginOrigin();
+  const result = await call((h) => getAuth().api.mfaResetAuthenticator({ headers: h }));
+  if (!result.ok) to("/auth/account", { error: result.code === "MFA_NOT_FRESH" ? "fresh" : "failed" });
+  to("/auth/mfa/setup", { next: "/auth/account" });
+}
+
+/* ------------------------------------------------------------------ */
+/* Access, sessions, signing out                                       */
+/* ------------------------------------------------------------------ */
+
+/** Tie the identity to a portal account if it can be. Only after the authenticator. */
+async function settleAccount() {
+  const session = await getLoginSession();
+  if (!session?.mfaVerifiedAt) return null;
+  return resolveAccount(session.user);
+}
+
+async function finish(next: string): Promise<never> {
+  const outcome = await settleAccount();
+  if (outcome === "bound" || outcome === "invitation_accepted") redirect(next);
+  to("/auth/access", { next });
+}
+
+export async function checkAccessAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const session = await getLoginSession();
+  if (!session) to("/auth/sign-in", { next });
+  if (!session.mfaVerifiedAt) to("/auth/mfa", { next });
+  await finish(next);
+}
+
+export async function linkProviderAction(form: FormData) {
+  await assertLoginOrigin();
+  const provider = form.get("provider");
+  if (!configuredProviders().includes(provider as SocialProvider)) to("/auth/account", { error: "failed" });
+  const result = await call((h) =>
+    getAuth().api.linkSocialAccount({
+      body: {
+        provider: provider as SocialProvider,
+        callbackURL: "/auth/account?notice=linked",
+        errorCallbackURL: "/auth/account?error=link",
+        disableRedirect: true,
+      },
+      headers: h,
+    }),
+  );
+  if (!result.ok || !result.value.url) to("/auth/account", { error: "link" });
+  redirect(result.value.url);
+}
+
+export async function revokeSessionAction(form: FormData) {
+  await assertLoginOrigin();
+  const id = z.string().min(1).max(200).safeParse(form.get("session"));
+  const current = await getLoginSession();
+  if (!current || !id.success) to("/auth/account", {});
+  // The token is looked up here, by id, among the caller's own sessions: no
+  // session token is ever put into a page.
+  const list = await call((h) => getAuth().api.listSessions({ headers: h }));
+  const target = list.ok ? list.value.find((s) => s.id === id.data) : undefined;
+  if (!target) to("/auth/account", { error: "failed" });
+  await call((h) => getAuth().api.revokeSession({ body: { token: target.token }, headers: h }));
+  await revokePortalSessionsFromAuthSession(target.id);
+  await consumeTicketsForAuthSession(target.id);
+  if (target.id === current.sessionId) to("/auth/sign-in", { notice: "signed-out" });
+  to("/auth/account", { notice: "revoked" });
+}
+
+export async function signOutAction() {
+  await assertLoginOrigin();
+  const current = await getLoginSession();
+  if (current) {
+    await revokePortalSessionsFromAuthSession(current.sessionId);
+    await consumeTicketsForAuthSession(current.sessionId);
+  }
+  await call((h) => getAuth().api.signOut({ headers: h }));
+  to("/auth/sign-in", { notice: "signed-out" });
+}
+
+export async function signOutEverywhereAction() {
+  await assertLoginOrigin();
+  const current = await getLoginSession();
+  if (!current) to("/auth/sign-in", {});
+  const list = await call((h) => getAuth().api.listSessions({ headers: h }));
+  for (const s of list.ok ? list.value : []) await consumeTicketsForAuthSession(s.id);
+  const account = await userByAuthUserId(current.user.id);
+  if (account) await revokePortalSessionsForUser(account.id);
+  await call((h) => getAuth().api.revokeSessions({ headers: h }));
+  await call((h) => getAuth().api.signOut({ headers: h }));
+  to("/auth/sign-in", { notice: "signed-out-everywhere" });
+}
+
+/** After a password reset: the portal sessions of the account this identity is bound to. */
+async function endPortalAccessForAddress(address: string) {
+  const [identity] = await authDb()
+    .select({ id: authUsers.id })
+    .from(authUsers)
+    .where(eq(authUsers.email, address))
+    .limit(1);
+  const account = identity ? await userByAuthUserId(identity.id) : null;
+  if (account) await revokePortalSessionsForUser(account.id);
+}

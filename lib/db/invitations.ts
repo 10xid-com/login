@@ -135,11 +135,11 @@ export async function acceptInvitation(input: {
   email: string;
   role: MembershipRole;
   /**
-   * The WorkOS user whose VERIFIED address is `email`, when the invitation is
-   * being accepted through WorkOS sign-in. The account is then created already
-   * bound to that user (see users.workos_user_id). Omitted by the older
-   * emailed-code sign-up, which binds later through an operator.
+   * The sign-in identity (Better Auth user) whose VERIFIED address is `email`.
+   * The account is created already bound to it (users.auth_user_id).
    */
+  authUserId?: string;
+  /** 0021's WorkOS binding, superseded by authUserId and kept for its test. */
   workosUserId?: string;
 }): Promise<{ userId: string } | null> {
   return inTenantTransaction(input.organizationId, false, async (tx) => {
@@ -193,6 +193,7 @@ export async function acceptInvitation(input: {
         email: input.email.trim().toLowerCase(),
         isStaff,
         isService: false,
+        authUserId: input.authUserId ?? null,
         workosUserId: input.workosUserId ?? null,
       })
       .returning({ id: users.id });
