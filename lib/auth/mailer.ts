@@ -56,10 +56,11 @@ export function codeMessage(input: {
   code: string;
   purpose: CodePurpose;
   expiresInMinutes: number;
-}): { subject: string; text: string } {
+}): { subject: string; text: string; html: string } {
   const link = `${originFor(PRIMARY_HOST)}${ENTRY_PATH[input.purpose]}?email=${encodeURIComponent(input.to)}`;
   return {
     subject: SUBJECT[input.purpose](input.code),
+    html: codeHtml({ ...input, link }),
     text: [
       `${OPENING[input.purpose]} ${input.code}.`,
       ``,
@@ -70,6 +71,30 @@ export function codeMessage(input: {
       `If you did not ask for this, you can ignore this message — the code is useless without access to this mailbox.`,
     ].join("\n"),
   };
+}
+
+const escapeHtml = (v: string) =>
+  v.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+/** The same message as HTML: the code large, and a button to the entry page. Plain inline styles only. */
+function codeHtml(input: { code: string; purpose: CodePurpose; expiresInMinutes: number; link: string }): string {
+  const code = escapeHtml(input.code);
+  const link = escapeHtml(input.link);
+  return `<!doctype html>
+<html><body style="margin:0;padding:24px;background:#f5f6f4;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c1f1d">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px;background:#ffffff;border:1px solid #e3e6e1;border-radius:16px">
+      <tr><td style="padding:28px 28px 8px;font-size:12px;font-weight:600;letter-spacing:.06em;color:#244a80">10XiD</td></tr>
+      <tr><td style="padding:0 28px;font-size:15px;line-height:1.5">${escapeHtml(OPENING[input.purpose])}</td></tr>
+      <tr><td style="padding:12px 28px 4px;font-size:32px;font-weight:700;letter-spacing:.18em;font-family:ui-monospace,Menlo,Consolas,monospace">${code}</td></tr>
+      <tr><td style="padding:16px 28px">
+        <a href="${link}" style="display:inline-block;background:#244a80;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 20px;border-radius:8px">Enter your code</a>
+      </td></tr>
+      <tr><td style="padding:0 28px 8px;font-size:13px;line-height:1.5;color:#5b625e">It expires in ${input.expiresInMinutes} minutes and can be used once.</td></tr>
+      <tr><td style="padding:0 28px 28px;font-size:13px;line-height:1.5;color:#5b625e">If you did not ask for this, you can ignore this message — the code is useless without access to this mailbox.</td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
 }
 
 export async function sendAuthCode(input: {

@@ -71,6 +71,9 @@ every `*.10xid.com` host under our control; the portal's own cookie is `__Host-`
   a binding request and stops at "Waiting for confirmation". An operator confirms after checking
   with the person by another channel:
 
+  This is done on **`/auth/operator`** by anybody listed in `OPERATOR_EMAILS`, or from a
+  terminal with the owner connection:
+
   ```bash
   npm run identity:bindings -- list
   npm run identity:bindings -- confirm <request id> --operator "Full Name"
@@ -90,6 +93,7 @@ every `*.10xid.com` host under our control; the portal's own cookie is `__Host-`
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional. Without them the Google button is hidden. |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID` | Optional (tenant defaults to `common`). Without them the Microsoft button is hidden. |
 | `CLIENT_IP_HEADER` | Optional; default `x-real-ip` (Railway's edge). Rate limits key on it. |
+| `OPERATOR_EMAILS` | Comma-separated portal account addresses allowed to use `/auth/operator` (confirm sign-ins for accounts from before, invite, reset a lost authenticator). Empty means nobody. |
 
 Already present and still used: `DATABASE_URL`, `DATABASE_APP_URL`, `PRIMARY_HOST`,
 `PORTAL_HOST`, `RESEND_API_KEY`, `MAIL_FROM`. Healthcheck path: set `/healthz` **after** the new

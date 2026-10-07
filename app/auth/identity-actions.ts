@@ -7,6 +7,7 @@ import { z } from "zod";
 import { configuredProviders, getAuth, type SocialProvider } from "@/lib/auth/auth";
 import { forgetRecoveryCodes, showRecoveryCodesOnce } from "@/lib/auth/recovery-codes-once";
 import { allow } from "@/lib/auth/throttle";
+import { rememberResume } from "@/lib/auth/resume";
 import {
   assertLoginOrigin,
   getLoginSession,
@@ -89,7 +90,11 @@ export async function requestSignInCodeAction(form: FormData) {
   const next = safeNext(form.get("next"));
   const address = email.safeParse(form.get("email"));
   if (!address.success) to("/auth/sign-in/code", { error: "email", next });
-  if (!(await allow("requestCode", address.data))) to("/auth/sign-in/code", { error: "rate", next });
+  const resend = form.get("resend") === "1";
+  if (!(await allow("requestCode", address.data))) {
+    to("/auth/sign-in/code", { email: resend ? address.data : undefined, error: "rate", next });
+  }
+  await rememberResume(next);
 
   // The same answer whether or not the address can sign in: an identity is
   // only ever created for an invited address (lib/auth/auth.ts), and the page
@@ -98,9 +103,9 @@ export async function requestSignInCodeAction(form: FormData) {
     getAuth().api.sendVerificationOTP({ body: { email: address.data, type: "sign-in" }, headers: h }),
   );
   if (!result.ok && (result.code === "TOO_MANY_REQUESTS" || result.code === "429")) {
-    to("/auth/sign-in/code", { error: "rate", next });
+    to("/auth/sign-in/code", { email: resend ? address.data : undefined, error: "rate", next });
   }
-  to("/auth/sign-in/code", { email: address.data, next });
+  to("/auth/sign-in/code", { email: address.data, next, notice: resend ? "resent" : undefined });
 }
 
 export async function signInWithCodeAction(form: FormData) {
@@ -133,7 +138,7 @@ export async function requestPasswordResetAction(form: FormData) {
   if (!result.ok && (result.code === "TOO_MANY_REQUESTS" || result.code === "429")) {
     to("/auth/forgot-password", { error: "rate" });
   }
-  to("/auth/reset-password", { email: address.data });
+  to("/auth/reset-password", { email: address.data, notice: form.get("resend") === "1" ? "resent" : undefined });
 }
 
 export async function resetPasswordAction(form: FormData) {

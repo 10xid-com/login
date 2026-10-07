@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { resetPasswordAction } from "../identity-actions";
+import { requestPasswordResetAction, resetPasswordAction } from "../identity-actions";
 import { AuthCard, FieldError, SubmitButton, inputClass, labelClass } from "../auth-card";
-import { Notice } from "../flow-ui";
+import { Hidden, Notice, SecondaryButton } from "../flow-ui";
 
 export const metadata: Metadata = { title: "Choose a new password" };
 
@@ -14,14 +14,20 @@ const ERRORS: Record<string, string> = {
 export default async function ResetPasswordPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; email?: string }>;
+  searchParams: Promise<{ error?: string; email?: string; notice?: string }>;
 }) {
   const params = await searchParams;
   const error = params.error ? ERRORS[params.error] : null;
   const address = params.email ?? "";
   return (
     <AuthCard title="Choose a new password">
-      {address ? <Notice>If {address} has a sign-in, a code is on its way.</Notice> : null}
+      {address ? (
+        <Notice>
+          {params.notice === "resent"
+            ? `A new code is on its way to ${address}.`
+            : `If ${address} has a sign-in, a code is on its way.`}
+        </Notice>
+      ) : null}
       <form action={resetPasswordAction}>
         <label htmlFor="email" className={labelClass}>Email</label>
         <input id="email" name="email" type="email" required defaultValue={address} className={inputClass} />
@@ -34,6 +40,13 @@ export default async function ResetPasswordPage({
         {error ? <FieldError>{error}</FieldError> : null}
         <SubmitButton>Change password</SubmitButton>
       </form>
+      {address ? (
+        <form action={requestPasswordResetAction} className="mt-3">
+          <Hidden name="email" value={address} />
+          <Hidden name="resend" value="1" />
+          <SecondaryButton>Send a new code</SecondaryButton>
+        </form>
+      ) : null}
     </AuthCard>
   );
 }
