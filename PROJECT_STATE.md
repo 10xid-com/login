@@ -4,7 +4,7 @@
 Phase 1 — Platform Hardening
 
 ## Current action
-Phase 1 / Enforced CI/security gates — PR #8 (`ci/database-security`) now has a live disposable PostgreSQL 18.6 database-security run passing end-to-end. Existing `quality` remains intact. PR #8 is open/unmerged and the new database-security check has not been added to branch protection.
+Phase 1 / Enforced CI/security gates — PR #8 (`ci/database-security`) was merged on 2026-10-06 by 0TBS; the `database-security` check now runs on every pull request alongside `quality`. Whether it has been added to branch protection as a required check has not been verified since.
 
 ## Last passed checkpoint
 Phase 1 CI enforcement checkpoint: `10xid-com/login` was made public by explicit user choice with no billing change. Classic branch protection rule `84348218` applies to `main` (1 branch), requires a pull request before merging, and requires status check `quality` with updates accepted specifically from GitHub Actions. No database-backed checks or extra review restrictions are required. Approvals are off; administrator bypass remains allowed (`Do not allow bypassing` is unchecked), so do not claim universal/admin enforcement. Force pushes and branch deletions remain disallowed. No production app, DNS, Railway, or Neon changes were made.
@@ -52,7 +52,7 @@ Phase 1 CI enforcement checkpoint: `10xid-com/login` was made public by explicit
 - Railway workspace is on Hobby; native Railway Backups/PITR require Pro.
 - Paolo explicitly rejected upgrading Railway to Pro for recoverability.
 - Paolo explicitly approved Vercel Pro + Neon as the Phase 1 recoverability path.
-- The current Railway database is approximately 10 MB (10,843,839 bytes).
+- The Railway database was approximately 10 MB (10,843,839 bytes) on 2026-10-02. On 2026-10-07 it is 67,401,407 bytes, including the frozen `research` schema (roughly 50 MB, see below).
 - Vercel team is already on Pro.
 - Vercel does not provide first-party Postgres; Neon is the approved Marketplace database target.
 - The migration must be treated as a database migration, not a hosting switch.
@@ -62,9 +62,9 @@ Phase 1 CI enforcement checkpoint: `10xid-com/login` was made public by explicit
 - Existing live Railway app role is not superuser, has no BYPASSRLS, and owns zero public tables.
 - Existing tenant isolation and workspace isolation tests are substantial and must be rerun against Neon before cutover.
 - Current Railway database has no backups/PITR.
-- Railway source baseline captured from PostgreSQL 18.6, database size 10,843,839 bytes, with 35 public tables, 20 Drizzle migration records, current table row counts, role attributes, ownership, grants, RLS flags, and 27 RLS policies.
+- *Superseded by the 2026-10-07 baseline below.* Railway source baseline captured 2026-10-02 from PostgreSQL 18.6, database size 10,843,839 bytes, with 35 public tables, 20 Drizzle migration records, current table row counts, role attributes, ownership, grants, RLS flags, and 27 RLS policies.
 - All public tables are currently owned by `postgres`; `portal_app` remains non-superuser and non-BYPASSRLS.
-- Current baseline shows 2 rows in `permissions` (Phase 0 earlier observed 0), so the source dataset changed between checkpoints; the new baseline is authoritative for migration certification.
+- The 2026-10-02 baseline showed 2 rows in `permissions` (Phase 0 earlier observed 0), so the source dataset changes between checkpoints; the newest baseline (2026-10-07) is authoritative for migration certification.
 - Existing GitHub App credential in staging is malformed and remains a later Phase 1 item.
 - Current staff account has confirmed TOTP but no recovery codes; current UI can provision them later.
 - Current staff base sessions use a 400-day/no-idle policy; review is required later in Phase 1.
@@ -83,18 +83,32 @@ Paolo's direction (2026-10-07): the portal lives at `app.10xid.com` in its own p
 - **Railway, project "10XiD Portal" (production):** service `portal` = `10xid-com/login` `main`, `login.10xid.com`, now with `PORTAL_HOST=app.10xid.com`. New service `app` (id `57a6b03c-868a-4e1c-bc54-ced8bfcd8e6e`) = `10xid-com/app` `main`, serving `app.10xid.com` and `northstar.10xconnections.com` (both verified, certificates valid). `app`'s variables are Railway references to `portal`'s (`DATABASE_APP_URL`, Resend, GitHub App, Ollama) plus `PRIMARY_HOST=login.10xid.com`, `SESSION_COOKIE_SECURE=true`, `PORT=8080`. It has no owner connection and runs no migrations. Its startup check confirmed the restricted role.
 - **The old `portal-northstar` service no longer existed** when this work began (its Railway address answered 404 and `northstar.10xconnections.com` was down). Northstar's portal is now served by `app`.
 - **Cloudflare DNS (2026-10-07):** zone `10xid.com`: added `app` CNAME `x5oc5lcf.up.railway.app` (DNS-only) and TXT `_railway-verify.app`. Zone `10xconnections.com`: `northstar` CNAME repointed from `2u2c9mtq.up.railway.app` (dead) to `m4ope9vp.up.railway.app` (DNS-only). The proxied wildcard `*.10xid.com` A `185.206.163.79` was left untouched.
-- **Database (Railway source):** migration `0020_sessions_source_session` (nullable `sessions.source_session_id`, FK to `sessions`, index) was applied by the PR #13 deploy at 2026-10-07 ~13:52 UTC; the journal now has 21 entries. Paolo approved this as a deliberate exception to "Railway source must remain untouched". `organization_domains` gained `app.10xid.com` under Branding Centres (internal) at 14:05 UTC via the deploy step. **The Railway source baseline captured on 2026-10-02 (20 migration records) is stale**: re-capture the migration journal, schema, `sessions` definition and `organization_domains` rows from Railway, and account for `0020` in the Neon migration-history and schema verification steps.
+- **Database (Railway source):** migration `0020_sessions_source_session` (nullable `sessions.source_session_id`, FK to `sessions`, index) was applied by the PR #13 deploy at 2026-10-07 ~13:52 UTC; the journal now has 21 entries. Paolo approved this as a deliberate exception to "Railway source must remain untouched". `organization_domains` gained `app.10xid.com` under Branding Centres (internal) at 14:05 UTC via the deploy step. The 2026-10-02 baseline is superseded; the 2026-10-07 baseline below includes `0020` and the current `organization_domains` rows. Account for `0020` in the Neon migration-history and schema verification steps.
 - **Session behaviour (approved by Paolo 2026-10-07):** a browser's login-host session and the sessions handed over from it are one device; "Sign out here" ends them together and the device count no longer includes your own login session.
 - **Verified live after the switch (no real sign-in):** login host sends signed-out visitors to its form and signed-in ones to `app.10xid.com` with the path kept; `/api/*` is not redirected; `app.10xid.com` and northstar start the handoff, which reaches the login host; the portal forwards sign-in screens to the login host; a forged ticket is refused. **A real sign-in end to end was verified by Paolo on 2026-10-07** (signed out, signed in again at `login.10xid.com`, landed on `app.10xid.com` with no second prompt).
 - `PORTAL_CLIENT_DOMAINS` on `portal` was reduced to `northstar=northstar.10xconnections.com` (it also re-registered the dead `portal-northstar-production.up.railway.app`). The registration steps only add rows, so the deploy step gained `PORTAL_RETIRED_DOMAINS`: exact hostnames whose rows it deletes, refusing any still configured as live. `portal` has `PORTAL_RETIRED_DOMAINS=portal-northstar-production.up.railway.app`; the deploy log line `Domain retired: …` (or `already retired`) confirms it.
 
+## Railway source baseline — 2026-10-07 (current; supersedes 2026-10-02)
+Captured by Codex on Paolo's machine on 2026-10-07 (about 14:30 UTC), after the portal move. Read-only, over the Railway CLI's private SSH tunnel (`railway connect Postgres --tunnel-only`): no public database endpoint was created and the database was not restarted. The catalog queries ran in one repeatable-read, read-only transaction; the dump used a separate snapshot. The tunnel is closed.
+
+- **Dump:** custom-format `pg_dump` from PostgreSQL 18.6 with `--exclude-schema=research`. 186,470 bytes, 422 TOC entries, including the Drizzle journal, public schema and data, ACLs and policies. SHA-256 `02ccef653d404f142b70fe757599a1f9dd8322cce2c15393cb1e3c5afe1bad41`. Validated by archive-manifest inspection and a full `pg_restore --exit-on-error --file=/dev/null` decode; **this is archive validation, not a restore drill** (no restore SQL executed). Kept private on Paolo's machine (`…\Documents\Codex\2026-10-07\you-x20\outputs\railway-source-2026-10-07.dump`); never committed. Cluster roles are not in the dump.
+- **Server/database:** PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2); database `railway`; 67,401,407 bytes including the frozen `research` schema (not the portal-only size).
+- **Migration journal:** 21 records. IDs 1–21 hash-match `drizzle/0000_smiling_saracen.sql` … `drizzle/0020_sessions_source_session.sql` in this repository exactly. ID 21 (`0020`): `02935e93c7e323069b39420a732607cee775d0933999f3659577af7d6bb7a4c9`.
+- **Tables:** 35 in `public`, all owned by `postgres`. RLS enabled on 21, forced on none. Without RLS: `act_as_grants`, `connections`, `identities`, `memberships`, `organization_domains`, `organizations`, `recovery_codes`, `sessions`, `sign_in_codes`, `sso_tickets`, `staff_grants`, `task_time_bands`, `user_emails`, `users`.
+- **Policies:** 27 in `public`, all `PERMISSIVE` and all for `portal_app`. They are tenant isolation on `app.org_id`, owner isolation (`app.org_id` and `app.user_id`) on the workspace/agent tables, staff reads on `app.is_staff`, and the `app.authenticating` lookups on `api_keys` and `invitations`.
+- **Role `portal_app`:** LOGIN; not SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE or REPLICATION; no role memberships; owns no public tables. 110 table-level grants in `public`.
+- **`sessions`:** includes `source_session_id uuid` (nullable), index `sessions_source_session_idx`, and FK `sessions_source_session_id_sessions_id_fk` to `sessions(id)`.
+- **`organization_domains`:** exactly two rows: `northstar.10xconnections.com` (primary, Northstar) and `app.10xid.com` (not primary, Branding Centres). The stale `portal-northstar-production.up.railway.app` row is absent, confirmed by direct SQL and by deploy `0f5770f3-96a6-4865-8394-2821e04d1152`.
+- **Row counts:** act_as_grants 2, agent_run_receipts 42, agent_runs 11, api_keys 0, connections 0, conversation_context_items 2, conversation_messages 20, conversations 7, department_members 0, departments 0, engine_mode_policies 0, identities 0, invitations 0, job_events 4, jobs 3, memberships 10, organization_domains 2, organizations 10, permissions 2, recovery_codes 0, repositories 1, sessions 17, sign_in_codes 20, sso_tickets 3, staff_grants 19, task_claims 0, task_events 0, task_grades 0, task_offers 0, task_time_bands 3, task_types 0, tasks 0, user_emails 9, users 9, workspaces 3.
+- The full catalog output (policy expressions, per-table grants, `sessions` and `organization_domains` definitions) is kept with the dump on Paolo's machine rather than in this public repository.
+
 ## Blockers
 - Neon target currently contains migration-authored application rows; source data must not be imported on top of them until a safe reset/import sequence is selected.
-- Current repo migration hashes do not match the Railway source migration journal, so migration replay is not a source-faithful reconstruction method.
-- A source-authoritative custom-format pg_dump was created from Railway on 2026-10-02. The archive reports PostgreSQL 18.6 source/dumper versions, 420 TOC entries, and includes the Drizzle migration journal plus public data and security objects.
+- *Corrected 2026-10-07:* all 21 Railway migration-journal hashes match the SHA-256 of the repository's current `drizzle/*.sql` files exactly (compared against the 2026-10-07 baseline), so the repository's migration SQL is what Railway applied. Replay is still not a full reconstruction, because migration 0012 writes data (see below) and data comes from the dump.
+- A source-authoritative custom-format pg_dump was created from Railway on 2026-10-02 (PostgreSQL 18.6, 420 TOC entries). *Superseded by the 2026-10-07 dump below, which is the one to restore from.*
 - pg_dump does not include cluster roles themselves; `portal_app` must exist separately on the Neon target before restoring ACLs/policies that reference it.
 - Source object ownership is recorded as `postgres`; on Neon we should restore with ownership suppressed and keep object ownership under the Neon owner while preserving the restricted non-owner `portal_app` separation.
-- No source database backup exists today.
+- Railway has no native backup or PITR for this database (Hobby plan). Logical dumps exist only off-platform, on Paolo's machine (2026-10-02, 2026-10-07).
 - Neon target role/ownership model has been partially inspected. `neondb_owner` is non-superuser but has BYPASSRLS and CREATEROLE; database owner is `neondb_owner`; `public` schema owner is `pg_database_owner`.
 - Neon successfully created a transactional test login role matching the intended app-role attributes: NOSUPERUSER, NOBYPASSRLS, LOGIN, NOCREATEDB, NOCREATEROLE. The transaction rollback removed the role, confirming no persistent change.
 - `neondb_owner` does not automatically have SET ROLE permission to a role it creates. An explicit membership grant is required for SQL-editor impersonation tests; this is a test-harness detail, not an app-runtime requirement because the app will connect directly as the restricted role.
@@ -102,7 +116,7 @@ Paolo's direction (2026-10-07): the portal lives at `app.10xid.com` in its own p
 - Neon successfully enforced an RLS policy bound to `app.org_id` under a restricted app-like role: one same-tenant row visible, cross-tenant row count zero; rollback removed all test objects.
 - Applying repository migrations to an empty Neon database is not schema-only. Migration 0012 contains committed application data and creates up to 8 organizations, 8 users, and 8 memberships; later migrations audit/reconcile some of that data. Therefore a naïve source data import onto the migrated target risks uniqueness/PK conflicts and must not proceed until target state is baselined and the copy method is adjusted.
 - Neon post-migration counts include organizations=8, users=8, user_emails=8, memberships=8, permissions=1, task_time_bands=3, while most other tables are empty.
-- The Neon migration journal contains 20 entries, but its hashes differ from the Railway source journal for many IDs (for example IDs 1-3 and 5-20). This proves the repository migration files have changed since the Railway database originally applied them. Replaying current migrations cannot be used to reconstruct the Railway source exactly.
+- The Neon migration journal contains 20 entries, but its hashes differ from the Railway source journal for many IDs (IDs 1-3 and 5-20). *Corrected 2026-10-07:* this does not mean the repository's migration files changed, since Railway's hashes match the current files exactly. The pattern matches line endings instead: converting the files to CRLF changes the hash of every one except ID 4 (`0003_job_counter`), exactly the IDs that differ. Most likely Neon was migrated from a checkout with CRLF line endings (e.g. Windows with `core.autocrlf=true`). The SQL executed is the same; the journal hashes are not. Confirm by comparing Neon's hashes with the CRLF hashes, and migrate Neon from an LF checkout (`git config core.autocrlf false`, or a `.gitattributes` with `*.sql text eol=lf`).
 - No migration copy or restore drill has yet been performed.
 - Neon role/ownership/grant/RLS compatibility has not yet been re-certified.
 
@@ -124,4 +138,6 @@ The copied Neon database must pass:
 8. application/database isolation tests.
 
 ## Next action
-Human-review PR #8 and its live PostgreSQL 18 results. Do not merge PR #8 or add `database-security` to branch protection until explicitly approved.
+- Restore drill: restore the 2026-10-07 Railway dump (see "Railway source baseline — 2026-10-07") into a separate Neon branch/database, per acceptance criterion 1.
+- Neon re-certification against the 2026-10-07 baseline (acceptance criteria 2–8), including migration `0020`.
+- Decide whether `database-security` becomes a required check in branch protection (PR #8 is merged; the protection setting is unverified).
