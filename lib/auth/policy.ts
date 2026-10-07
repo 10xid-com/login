@@ -1,3 +1,5 @@
+import type { MembershipRole } from "@/lib/db/schema";
+
 /**
  * Browsers cap every cookie at 400 days regardless of what the server asks for,
  * so no configuration above this is real. Liveness is decided from the session
@@ -183,7 +185,7 @@ export const API_KEY_RATE = {
  */
 export type RoleDerivationMembership = {
   organizationType: "client" | "internal";
-  role: "owner" | "member" | "staff";
+  role: MembershipRole;
 };
 
 /** True for the one membership shape that confers staff: the house, as staff. */

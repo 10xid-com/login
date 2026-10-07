@@ -148,6 +148,13 @@
       "when": 1790000400000,
       "tag": "0020_sessions_source_session",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790000500000,
+      "tag": "0021_workos_identity",
+      "breakpoints": true
     }
   ]
 }

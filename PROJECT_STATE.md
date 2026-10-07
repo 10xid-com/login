@@ -4,7 +4,9 @@
 Phase 1 — Platform Hardening
 
 ## Current action
-Phase 1 / Enforced CI/security gates — PR #8 (`ci/database-security`) was merged on 2026-10-06 by 0TBS; the `database-security` check now runs on every pull request alongside `quality`. Whether it has been added to branch protection as a required check has not been verified since.
+WorkOS sign-in foundation built on branch `claude/great-ptolemy-sd6k4e` (see "WorkOS sign-in foundation" below); awaiting Paolo's review and the WorkOS setup before anything merges.
+
+Previously: Phase 1 / Enforced CI/security gates — PR #8 (`ci/database-security`) was merged on 2026-10-06 by 0TBS; the `database-security` check now runs on every pull request alongside `quality`. Whether it has been added to branch protection as a required check has not been verified since.
 
 ## Last passed checkpoint
 Phase 1 CI enforcement checkpoint: `10xid-com/login` was made public by explicit user choice with no billing change. Classic branch protection rule `84348218` applies to `main` (1 branch), requires a pull request before merging, and requires status check `quality` with updates accepted specifically from GitHub Actions. No database-backed checks or extra review restrictions are required. Approvals are off; administrator bypass remains allowed (`Do not allow bypassing` is unchecked), so do not claim universal/admin enforcement. Force pushes and branch deletions remain disallowed. No production app, DNS, Railway, or Neon changes were made.
@@ -87,6 +89,24 @@ Paolo's direction (2026-10-07): the portal lives at `app.10xid.com` in its own p
 - **Session behaviour (approved by Paolo 2026-10-07):** a browser's login-host session and the sessions handed over from it are one device; "Sign out here" ends them together and the device count no longer includes your own login session.
 - **Verified live after the switch (no real sign-in):** login host sends signed-out visitors to its form and signed-in ones to `app.10xid.com` with the path kept; `/api/*` is not redirected; `app.10xid.com` and northstar start the handoff, which reaches the login host; the portal forwards sign-in screens to the login host; a forged ticket is refused. **A real sign-in end to end was verified by Paolo on 2026-10-07** (signed out, signed in again at `login.10xid.com`, landed on `app.10xid.com` with no second prompt).
 - `PORTAL_CLIENT_DOMAINS` on `portal` was reduced to `northstar=northstar.10xconnections.com` (it also re-registered the dead `portal-northstar-production.up.railway.app`). The registration steps only add rows, so the deploy step gained `PORTAL_RETIRED_DOMAINS`: exact hostnames whose rows it deletes, refusing any still configured as live. `portal` has `PORTAL_RETIRED_DOMAINS=portal-northstar-production.up.railway.app`; the deploy log line `Domain retired: …` (or `already retired`) confirms it.
+
+## WorkOS sign-in foundation (built 2026-10-07, NOT deployed)
+Built from the 10XiD Build Brief (agreed with the consultant 2026-10-07), Part 1 "Start now" only: the audit, then the WorkOS foundation. Branch `claude/great-ptolemy-sd6k4e` in both repositories; nothing merged, nothing deployed, no Railway, DNS or WorkOS change made.
+
+Paolo's answers to the audit (2026-10-07):
+1. Staff access (staff grants, act-as) — **turn off**.
+2. Portal on client domains (northstar.10xconnections.com) — **remove**.
+3. Existing accounts — bound on first WorkOS sign-in with a verified address, **an operator confirms**.
+4. Six role templates; `owner` → owner; **every other action denied** until the permission matrix exists.
+5. Database — **Railway** (the existing production database; migration 0021 applies on the next `portal` deploy of `main`).
+6. WorkOS setup and the branded login.10xid.com domain — **now**.
+7. Extend `organizations` rather than add a `businesses` table.
+
+Here: migration `0021_workos_identity` (additive; safe to apply before the app ships), `scripts/identity-bindings.mjs`, 7-day invitations, `test/workos-binding.test.ts`. In `10xid-com/app`: WorkOS AuthKit via `@workos-inc/authkit-nextjs` 4.4.0, the central authorization function `lib/auth/authorize.ts`, exact-Origin + CSRF on every state-changing request, host-only on `app.10xid.com`, startup refusal of any session setting other than Revision 2's, `/healthz`, and `docs/session-gate.md` (the staging test of instruction 4).
+
+Order to go live: (1) WorkOS environments configured; (2) merge login → `portal` deploy applies 0021; (3) set the app's WorkOS variables and Railway healthcheck path `/healthz`; (4) merge app → `app` deploys; (5) session gate on staging/production; (6) operator confirms existing accounts; (7) remove `northstar.10xconnections.com` from the `app` service and `PORTAL_CLIENT_DOMAINS`, retire its `organization_domains` row; (8) point `login.10xid.com` at WorkOS (DNS-only CNAME) and retire the old sign-in screens.
+
+Still open (the brief's list): permission matrix, check order for agency routes, block rules, switching between businesses, audit-events table, freshness (24 h / 5 min) rules, the browser suite rewritten for WorkOS.
 
 ## Railway source baseline — 2026-10-07 (current; supersedes 2026-10-02)
 Captured by Codex on Paolo's machine on 2026-10-07 (about 14:30 UTC), after the portal move. Read-only, over the Railway CLI's private SSH tunnel (`railway connect Postgres --tunnel-only`): no public database endpoint was created and the database was not restarted. The catalog queries ran in one repeatable-read, read-only transaction; the dump used a separate snapshot. The tunnel is closed.
