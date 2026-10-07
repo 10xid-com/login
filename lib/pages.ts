@@ -216,6 +216,16 @@ export const PAGES: PageRecord[] = [
   /* -------------------------------------------------------------- */
   /* Staff                                                           */
   /* -------------------------------------------------------------- */
+  {
+    id: "login.operator",
+    path: "/auth/operator",
+    name: "Operator",
+    purpose: "Confirm sign-ins for accounts from before, invite people, reset a lost authenticator. Operators only (OPERATOR_EMAILS); a 404 to anybody else.",
+    audience: "staff",
+    kind: "page",
+    file: "app/auth/operator/page.tsx",
+    group: "Staff",
+  },
 
   /* -------------------------------------------------------------- */
   /* Machinery                                                       */

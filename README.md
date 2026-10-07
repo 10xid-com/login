@@ -54,8 +54,12 @@ the portal's role cannot read them. The seven-day maximum and 48-hour inactivity
 enforced by Postgres. The full design, the Railway variables, provider setup, deployment order
 and rollback are in **[`docs/better-auth-cutover.md`](docs/better-auth-cutover.md)**.
 
-An operator answers binding requests (an account from before, signing in for the first time),
-connecting as the owner:
+An operator answers binding requests (an account from before, signing in for the first time)
+on **`/auth/operator`** — confirm or reject, invite somebody into a business, reset a lost
+authenticator. Operators are the portal accounts listed in `OPERATOR_EMAILS` on the login
+service; each action needs the authenticator within five minutes, and goes through
+`operator_*` database functions (0023) that only the login service's sign-in role may call. The
+same answers are available from a terminal, connecting as the owner:
 
 ```bash
 npm run identity:bindings -- list

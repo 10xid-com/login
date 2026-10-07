@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { configuredProviders, getAuth } from "@/lib/auth/auth";
 import { authenticatorState, getLoginSession } from "@/lib/auth/login";
+import { getOperator } from "@/lib/auth/operator";
 import {
   setPasswordAction,
   linkProviderAction,
@@ -43,10 +44,11 @@ export default async function AccountPage({
   if (!session.mfaVerifiedAt) redirect("/auth/mfa?next=%2Fauth%2Faccount");
 
   const h = await headers();
-  const [sessions, accounts, factor] = await Promise.all([
+  const [sessions, accounts, factor, operator] = await Promise.all([
     getAuth().api.listSessions({ headers: h }),
     getAuth().api.listUserAccounts({ headers: h }),
     authenticatorState(session.user.id),
+    getOperator(),
   ]);
   const linked = new Set(accounts.map((a) => a.providerId));
   const hasPassword = linked.has("credential");
@@ -59,7 +61,12 @@ export default async function AccountPage({
 
   return (
     <AuthCard title="Your sign-in" intro={session.user.email}
-      footer={<TextLink href="/">Continue to 10XiD</TextLink>}>
+      footer={
+        <>
+          <TextLink href="/">Continue to 10XiD</TextLink>
+          {operator ? <> · <TextLink href="/auth/operator">Operator</TextLink></> : null}
+        </>
+      }>
       {notice ? <Notice>{notice}</Notice> : null}
       {error ? <FieldError>{error}</FieldError> : null}
 

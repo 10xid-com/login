@@ -1,7 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { promisify } from "node:util";
 import { Client } from "pg";
 import { openAccountMenu, seededIds, totpCode } from "./helpers";
 
@@ -97,6 +95,37 @@ async function freshCode(secret: string): Promise<string> {
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
+}
+
+/**
+ * The operator the login dev server was started with (OPERATOR_EMAILS). The
+ * first run invites and binds them; later runs remove their authenticator so
+ * the test can enrol a new one it knows.
+ */
+const OPERATOR = "operator-e2e@test.invalid";
+let operatorSecretValue = "";
+async function operatorSecret(): Promise<string> {
+  return operatorSecretValue;
+}
+async function signInAsOperator(page: Page) {
+  const bound = await sql("select 1 from users where email = $1 and auth_user_id is not null", [OPERATOR]);
+  if (bound.length === 0) {
+    await sql("delete from invitations where email = $1", [OPERATOR]);
+    const [inviter] = await sql<{ id: string }>("select id from users order by created_at limit 1");
+    await sql(
+      `insert into invitations (email, organization_id, role, invited_by, expires_at)
+       values ($1, $2, 'owner', $3, now() + interval '7 days')`,
+      [OPERATOR, orgId, inviter!.id],
+    );
+  }
+  await sql("delete from auth_two_factors where user_id = (select id from auth_users where email = $1)", [OPERATOR]);
+  await page.goto(`${LOGIN}/auth/sign-in/code`);
+  await page.getByLabel("Email").fill(OPERATOR);
+  await page.getByRole("button", { name: "Email me a code" }).click();
+  await page.getByLabel("Code").fill(await codeFor(OPERATOR, "sign-in"));
+  await page.getByRole("button", { name: "Continue" }).click();
+  operatorSecretValue = (await enrolFromPage(page)).secret;
+  await page.getByRole("button", { name: /saved them/ }).click();
 }
 
 async function cookieNames(context: BrowserContext, origin: string) {
@@ -234,7 +263,7 @@ test("an address nobody invited gets nothing — not even an email", async ({ pa
   expect(await sql("select 1 from auth_users where email = $1", [email])).toHaveLength(0);
 });
 
-test("an existing account is not merged by address: it waits for an operator", async ({ page }) => {
+test("an existing account is not merged by address: it waits for an operator", async ({ page, browser }) => {
   const email = `legacy-${TAG}@test.invalid`;
   const [user] = await sql<{ id: string }>("insert into users (email) values ($1) returning id", [email]);
   await sql("insert into memberships (user_id, organization_id, role) values ($1, $2, 'owner')", [user!.id, orgId]);
@@ -254,16 +283,29 @@ test("an existing account is not merged by address: it waits for an operator", a
   await page.goto(`${APP}/dashboard`);
   await expect(page).toHaveURL(/\/auth\/access/);
 
-  // The operator confirms; "Check again" now goes straight through.
-  const [request] = await sql<{ id: string }>(
-    "select id from identity_bindings where user_id = $1 and decision is null",
+  // Not an operator: the operator screen does not exist for this person.
+  const notOperator = await page.goto(`${LOGIN}/auth/operator`);
+  expect(notOperator?.status()).toBe(404);
+  await page.goto(`${LOGIN}/auth/access`);
+
+  // An operator (OPERATOR_EMAILS on the login server) confirms it on the
+  // operator screen, in their own browser.
+  const operator = await browser.newContext();
+  const op = await operator.newPage();
+  await signInAsOperator(op);
+  await op.goto(`${LOGIN}/auth/operator`);
+  const row = op.getByRole("listitem").filter({ hasText: email });
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "Confirm" }).click();
+  await expect(op.getByRole("status")).toContainText("Confirmed");
+  const [decided] = await sql<{ decided_by: string }>(
+    "select decided_by from identity_bindings where user_id = $1",
     [user!.id],
   );
-  await promisify(execFile)(
-    "node",
-    ["scripts/identity-bindings.mjs", "confirm", request!.id, "--operator", "E2E Operator"],
-    { env: process.env },
-  );
+  expect(decided?.decided_by).toBeTruthy();
+  await operator.close();
+
+  // "Check again" now goes straight through.
   await page.getByRole("button", { name: "Check again" }).click();
   await expect(page).toHaveURL(new RegExp(`^${APP}/dashboard`));
 });
@@ -366,4 +408,59 @@ test("a recovery code stands in for a lost phone; signing out everywhere ends th
   await second.close();
   await page.goto(`${APP}/dashboard`);
   await expect(page).toHaveURL(new RegExp(`^${LOGIN}/auth/sign-in`));
+});
+
+test("operator screen: invite, then a code is asked for once five minutes have passed, then reset an authenticator", async ({ page, browser }) => {
+  await signInAsOperator(page);
+  await page.goto(`${LOGIN}/auth/operator`);
+
+  // Invite: the invited address can then get a code.
+  const invited = `invited-${TAG}@test.invalid`;
+  await page.getByLabel("Email", { exact: true }).first().fill(invited);
+  await page.getByLabel("Business").selectOption(orgId);
+  await page.getByLabel("Role").selectOption("owner");
+  await page.getByRole("button", { name: "Send invitation" }).click();
+  await expect(page.getByRole("status")).toContainText(`Invited ${invited}`);
+  const [inv] = await sql<{ role: string }>("select role from invitations where email = $1 and revoked_at is null", [invited]);
+  expect(inv?.role).toBe("owner");
+
+  // Five minutes later, each action needs a code from the authenticator.
+  await sql(
+    `update auth_sessions set mfa_verified_at = now() - interval '6 minutes'
+      where user_id = (select id from auth_users where email = $1)`,
+    [OPERATOR],
+  );
+  await page.goto(`${LOGIN}/auth/operator`);
+  await expect(page.getByText("Each action asks for a code")).toBeVisible();
+
+  // A person who lost their phone: reset their authenticator.
+  const lost = await invite("lostphone");
+  const theirs = await browser.newContext();
+  const p = await theirs.newPage();
+  await p.goto(`${LOGIN}/auth/sign-in/code`);
+  await p.getByLabel("Email").fill(lost);
+  await p.getByRole("button", { name: "Email me a code" }).click();
+  await p.getByLabel("Code").fill(await codeFor(lost, "sign-in"));
+  await p.getByRole("button", { name: "Continue" }).click();
+  await enrolFromPage(p);
+
+  const form = page.locator("form").filter({ hasText: "Reset authenticator" });
+  // The code is required: the form cannot be sent without one.
+  await expect(form.getByLabel("Authenticator code")).toHaveAttribute("required", "");
+
+  const secret = await operatorSecret();
+  await form.getByLabel("Email they sign in with").fill(lost);
+  await form.getByLabel("Authenticator code").fill(await freshCode(secret));
+  await form.getByRole("button", { name: /Reset authenticator/ }).click();
+  await expect(page.getByRole("status")).toContainText(`Authenticator removed and every session ended for ${lost}`);
+
+  // Their session is gone, and their next sign-in sets up a new authenticator.
+  await p.goto(`${LOGIN}/auth/account`);
+  await expect(p).toHaveURL(/\/auth\/sign-in/);
+  const [factors] = await sql<{ n: number }>(
+    "select count(*)::int as n from auth_two_factors where user_id = (select id from auth_users where email = $1)",
+    [lost],
+  );
+  expect(factors?.n).toBe(0);
+  await theirs.close();
 });
