@@ -124,6 +124,7 @@ try {
   await bootstrap(pool);
   await registerClientDomains(pool);
   await registerPortalHost(pool);
+  await retireDomains(pool);
 } catch (error) {
   console.error("Migration failed:", error);
   process.exitCode = 1;
@@ -312,4 +313,52 @@ async function registerPortalHost(pool) {
     [rows[0].id, hostname],
   );
   console.log(`Portal host registered: ${hostname}`);
+}
+
+/**
+ * Remove hostnames that are no longer ours.
+ *
+ * PORTAL_RETIRED_DOMAINS is a comma-separated list of exact hostnames. Each
+ * one's row in organization_domains is deleted, so the handoff will no longer
+ * mint a ticket for it — which matters once a hostname has been released: a
+ * Railway address whose service was deleted can be claimed by somebody else.
+ *
+ * The registration steps above only ever add rows, deliberately, so a
+ * misconfigured or empty variable can never unregister a live domain. This is
+ * the one way out, and it names each hostname explicitly rather than inferring
+ * anything from what the other variables leave out. A hostname also listed in
+ * PORTAL_CLIENT_DOMAINS or PORTAL_HOST is refused rather than deleted.
+ */
+async function retireDomains(pool) {
+  const spec = process.env.PORTAL_RETIRED_DOMAINS?.trim();
+  if (!spec) return;
+
+  const live = new Set(
+    [
+      ...(process.env.PORTAL_CLIENT_DOMAINS ?? "")
+        .split(",")
+        .map((pair) => pair.split("=")[1]),
+      process.env.PORTAL_HOST,
+    ]
+      .map((h) => h?.trim().toLowerCase())
+      .filter(Boolean),
+  );
+
+  for (const raw of spec.split(",")) {
+    const hostname = raw.trim().toLowerCase();
+    if (!hostname) continue;
+    if (live.has(hostname)) {
+      console.warn(`Not retiring "${hostname}": it is still configured as live.`);
+      continue;
+    }
+    const { rowCount } = await pool.query(
+      "delete from organization_domains where hostname = $1",
+      [hostname],
+    );
+    console.log(
+      rowCount
+        ? `Domain retired: ${hostname}`
+        : `Domain already retired: ${hostname}`,
+    );
+  }
 }
