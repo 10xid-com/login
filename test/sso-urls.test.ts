@@ -19,12 +19,12 @@ afterEach(() => {
 describe("signInUrl", () => {
   test("is the login host's form by full address", async () => {
     const sso = await load({ primary: "login.10xid.com", portal: "app.10xid.com" });
-    expect(sso.signInUrl()).toBe("https://login.10xid.com/auth/login");
+    expect(sso.signInUrl()).toBe("https://login.10xid.com/auth/sign-in");
   });
 
   test("is a plain path when there is no login host configured", async () => {
     const sso = await load({ primary: "", portal: "" });
-    expect(sso.signInUrl()).toBe("/auth/login");
+    expect(sso.signInUrl()).toBe("/auth/sign-in");
   });
 });
 

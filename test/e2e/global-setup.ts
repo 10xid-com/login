@@ -24,6 +24,8 @@ export default async function globalSetup() {
   const db = new Client({ connectionString: process.env.DATABASE_URL });
   await db.connect();
   await db.query("truncate sign_in_codes, sso_tickets, sessions cascade");
+  // Rate-limit counters, so one run does not inherit the last one's.
+  await db.query("delete from auth_rate_limits");
   await db.end();
 
   await rm(process.env.DEV_CODE_SINK ?? "/tmp/portal-signin-codes.log", {

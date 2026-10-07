@@ -191,6 +191,18 @@ export const users = pgTable("users", {
    * Never inferred from an email address at request time.
    */
   workosUserId: text("workos_user_id").unique(),
+  /**
+   * The Better Auth user id (auth_users.id): the identity key since 0022,
+   * replacing the WorkOS user id above, which was never put into use and is
+   * left in place only because migrations here are additive.
+   *
+   * The same rules as before, enforced by 0022's trigger: set once and never
+   * changed; on INSERT when a verified address accepts an invitation made out
+   * to exactly that address; otherwise only by an operator confirming an
+   * `identity_bindings` request. The application roles cannot bind an
+   * existing account themselves.
+   */
+  authUserId: text("auth_user_id").unique(),
   /** Stored lowercase. The identity — there is no password column. */
   email: text("email").notNull().unique(),
   fullName: text("full_name"),
@@ -526,8 +538,11 @@ export const identityBindings = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
-    workosUserId: text("workos_user_id").notNull(),
-    /** The verified address WorkOS reported, stored lowercase. */
+    /** Superseded by authUserId (0022); null on every request made since. */
+    workosUserId: text("workos_user_id"),
+    /** The Better Auth user asking to be bound. Exactly one of the two is set. */
+    authUserId: text("auth_user_id"),
+    /** The verified address the sign-in reported, stored lowercase. */
     email: text("email").notNull(),
     requestedAt: timestamp("requested_at", { withTimezone: true })
       .notNull()
@@ -541,6 +556,7 @@ export const identityBindings = pgTable(
   (t) => [
     index("identity_bindings_user_idx").on(t.userId),
     index("identity_bindings_workos_user_idx").on(t.workosUserId),
+    index("identity_bindings_auth_user_idx").on(t.authUserId),
   ],
 );
 
@@ -599,10 +615,17 @@ export const sessions = pgTable(
     sourceSessionId: uuid("source_session_id").references(
       (): AnyPgColumn => sessions.id,
     ),
+    /**
+     * The Better Auth session on the login host that this session was handed
+     * over from (0022). The portal checks it is still live on every request,
+     * through auth_session_touch(), so revoking the sign-in revokes this too.
+     */
+    sourceAuthSessionId: text("source_auth_session_id"),
   },
   (t) => [
     index("sessions_user_idx").on(t.userId),
     index("sessions_source_session_idx").on(t.sourceSessionId),
+    index("sessions_source_auth_session_idx").on(t.sourceAuthSessionId),
   ],
 );
 
@@ -704,14 +727,18 @@ export const ssoTickets = pgTable(
     audienceHost: text("audience_host").notNull(),
     /** A path within that host. Never a full URL, never cross-host. */
     returnPath: text("return_path").notNull().default("/"),
-    sourceSessionId: uuid("source_session_id")
-      .notNull()
-      .references(() => sessions.id),
+    /** The legacy login-host session that minted it; null since 0022. */
+    sourceSessionId: uuid("source_session_id").references(() => sessions.id),
+    /** The Better Auth session that minted it. One of the two is always set. */
+    sourceAuthSessionId: text("source_auth_session_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
     createdAt,
   },
-  (t) => [index("sso_tickets_session_idx").on(t.sourceSessionId)],
+  (t) => [
+    index("sso_tickets_session_idx").on(t.sourceSessionId),
+    index("sso_tickets_auth_session_idx").on(t.sourceAuthSessionId),
+  ],
 );
 
 /**
@@ -1607,4 +1634,152 @@ export const repositories = pgTable("repositories", {
     .references(() => users.id),
   linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
   unlinkedAt: timestamp("unlinked_at", { withTimezone: true }),
+});
+
+/* ------------------------------------------------------------------ */
+/* Better Auth (0022)                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The sign-in engine's own tables, used only by the login host.
+ *
+ * Who signed in, how, and with which second factor lives here; what they may
+ * do does not — that is `users`, `memberships` and the rest, reached through
+ * users.auth_user_id. The two are joined only by an invitation accepted by
+ * exactly its verified address, or by an operator.
+ *
+ * These tables hold password hashes, encrypted authenticator secrets, encrypted
+ * recovery codes and hashed one-time codes, so they belong to their own
+ * restricted role, `portal_auth`. `portal_app` — the role the portal (app.10xid.com)
+ * connects as — holds no privilege on any of them; the portal reaches a
+ * sign-in session only through three narrow functions (0022).
+ *
+ * The TypeScript field names are Better Auth's model fields, which is what its
+ * Drizzle adapter maps by; the columns are this schema's usual snake_case.
+ */
+export const authUsers = pgTable("auth_users", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull().unique(),
+  emailVerified: boolean("email_verified").notNull().default(false),
+  image: text("image"),
+  /**
+   * Unused, always false. Better Auth's two-factor plugin (which reads it) is
+   * not installed: the login host's own gate (lib/auth/mfa-gate.ts) requires
+   * the authenticator after EVERY sign-in method, which the plugin does not.
+   */
+  twoFactorEnabled: boolean("two_factor_enabled").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * A sign-in on the login host. The clocks are the database's (0022's
+ * trigger and row-level security), not the application's:
+ *
+ *   expires_at       never later than created_at + 7 days, whatever is written.
+ *   last_active_at   set by the database on every update; a session idle for
+ *                    48 hours is invisible to portal_auth, so it is signed out.
+ *   mfa_verified_at  always null on insert; set only by the MFA gate once the
+ *                    authenticator (or a recovery code) has been checked.
+ */
+export const authSessions = pgTable(
+  "auth_sessions",
+  {
+    id: text("id").primaryKey(),
+    token: text("token").notNull().unique(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    mfaVerifiedAt: timestamp("mfa_verified_at", { withTimezone: true }),
+    /**
+     * How the first step was proven: "password", "email-otp" or "social".
+     * Setting up an authenticator needs a session that proved the mailbox
+     * (an emailed code, or Google / Microsoft vouching for the address).
+     */
+    firstFactor: text("first_factor"),
+    lastActiveAt: timestamp("last_active_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("auth_sessions_user_idx").on(t.userId)],
+);
+
+/** A way to sign in: a password, or a Google / Microsoft account. */
+export const authAccounts = pgTable(
+  "auth_accounts",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    /** OAuth tokens are encrypted by Better Auth before they are written. */
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
+    scope: text("scope"),
+    /** A scrypt hash, for the `credential` provider only. */
+    password: text("password"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("auth_accounts_user_idx").on(t.userId),
+    uniqueIndex("auth_accounts_provider_account_idx").on(t.providerId, t.accountId),
+  ],
+);
+
+/** One-time codes (stored hashed), OAuth state and similar short-lived values. */
+export const authVerifications = pgTable(
+  "auth_verifications",
+  {
+    id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
+    value: text("value").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("auth_verifications_identifier_idx").on(t.identifier)],
+);
+
+/**
+ * The authenticator app. `secret` and `backup_codes` are encrypted with
+ * BETTER_AUTH_SECRET; `verified` is set only when a code from the app has
+ * been checked against the secret, so a secret nobody confirmed never counts.
+ */
+export const authTwoFactors = pgTable(
+  "auth_two_factors",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .unique()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
+    secret: text("secret").notNull(),
+    backupCodes: text("backup_codes").notNull(),
+    verified: boolean("verified").notNull().default(false),
+    failedVerificationCount: integer("failed_verification_count").notNull().default(0),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    /** The last 30-second step a code was accepted for; a code is never accepted twice. */
+    lastUsedStep: bigint("last_used_step", { mode: "number" }),
+    /** The one session that may confirm an unconfirmed secret, and see it. */
+    enrollingSessionId: text("enrolling_session_id"),
+  },
+  (t) => [index("auth_two_factors_secret_idx").on(t.secret)],
+);
+
+/** Rate-limit counters, in the database so they survive a restart. */
+export const authRateLimits = pgTable("auth_rate_limits", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  count: integer("count").notNull(),
+  lastRequest: bigint("last_request", { mode: "number" }).notNull(),
 });

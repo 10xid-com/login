@@ -19,6 +19,10 @@
  * `id_code` is unique across every row the table has ever held, revoked ones
  * included.
  *
+ * Retired, never to be reused: `sign-in`, `sign-up`, `code`, `authenticator`
+ * and `recovery` — the emailed-code sign-in, replaced by the self-hosted sign-in
+ * (`login.*`) in October 2026.
+ *
  * Nothing foreign-keys to these codes, deliberately, for the same reason
  * nothing foreign-keys to `identities.id_code`. An iD is a public handle, not a
  * primary key.
@@ -90,59 +94,107 @@ export const PAGES: PageRecord[] = [
     file: "app/page.tsx",
     group: "Getting in",
   },
-  {
-    id: "sign-in",
-    path: "/auth/login",
-    name: "Sign in",
-    purpose: "Give your email address and we post you a six-digit code. No password exists to type.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/login/page.tsx",
-    group: "Getting in",
-  },
-  {
-    id: "sign-up",
-    path: "/auth/signup",
-    name: "Accept an invitation",
-    purpose: "Where an invited person turns their invitation into an account.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/signup/page.tsx",
-    group: "Getting in",
-  },
-  {
-    id: "code",
-    path: "/auth/verify",
-    name: "Six-digit code",
-    purpose: "Type the code from the email. Proves you hold the inbox.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/verify/page.tsx",
-    group: "Getting in",
-  },
-  {
-    id: "authenticator",
-    path: "/auth/2fa",
-    name: "Authenticator",
-    purpose:
-      "The second factor. Staff reach every client's data, and an inbox is the thing most likely to be taken, so holding it is not enough on its own.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/2fa/page.tsx",
-    group: "Getting in",
-  },
-  {
-    id: "recovery",
-    path: "/auth/recovery-codes",
-    name: "Recovery codes",
-    purpose:
-      "The one-time list shown when you enrol an authenticator. It is the answer to losing the phone, and it is shown once.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/recovery-codes/page.tsx",
-    group: "Getting in",
-  },
 
+  {
+    id: "login.sign-in",
+    path: "/auth/sign-in",
+    name: "Sign in",
+    purpose: "Password, emailed code, Google or Microsoft — then always the authenticator app.",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/sign-in/page.tsx",
+    group: "Getting in",
+  },
+  {
+    id: "login.sign-in-code",
+    path: "/auth/sign-in/code",
+    name: "Sign in with a code",
+    purpose: "Passwordless: a six-digit code by email, then the authenticator.",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/sign-in/code/page.tsx",
+    group: "Getting in",
+  },
+  {
+    id: "login.sign-up",
+    path: "/auth/sign-up",
+    name: "Create your sign-in",
+    purpose: "For an invited address. Grants nothing until the address is confirmed and the authenticator set up.",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/sign-up/page.tsx",
+    group: "Getting in",
+  },
+  {
+    id: "login.forgot-password",
+    path: "/auth/forgot-password",
+    name: "Forgot password",
+    purpose: "Asks for a reset code by email.",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/forgot-password/page.tsx",
+    group: "Getting in",
+  },
+  {
+    id: "login.reset-password",
+    path: "/auth/reset-password",
+    name: "New password",
+    purpose: "Code plus new password. Signs out every session.",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/reset-password/page.tsx",
+    group: "Getting in",
+  },
+  {
+    id: "login.mfa",
+    path: "/auth/mfa",
+    name: "Authenticator code",
+    purpose: "The second step after every way of signing in.",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/mfa/page.tsx",
+    group: "Getting in",
+  },
+  {
+    id: "login.mfa-setup",
+    path: "/auth/mfa/setup",
+    name: "Set up authenticator",
+    purpose: "Scan, confirm with the first code, save the recovery codes shown once.",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/mfa/setup/page.tsx",
+    group: "Getting in",
+  },
+  {
+    id: "login.recovery-codes",
+    path: "/auth/mfa/recovery-codes",
+    name: "Your recovery codes",
+    purpose: "Shown once, right after they are made. Never in a URL; the copy that carries them here dies in ten minutes.",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/mfa/recovery-codes/page.tsx",
+    group: "Getting in",
+  },
+  {
+    id: "login.mfa-recover",
+    path: "/auth/mfa/recover",
+    name: "Recovery code",
+    purpose: "Pass the authenticator step with a one-time recovery code.",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/mfa/recover/page.tsx",
+    group: "Getting in",
+  },
+  {
+    id: "login.access",
+    path: "/auth/access",
+    name: "Access",
+    purpose: "Signed in, but what is still missing before 10XiD opens: a confirmed address, an invitation, or an operator's confirmation.",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/access/page.tsx",
+    group: "Getting in",
+  },
   /* -------------------------------------------------------------- */
   /* The work                                                        */
   /* -------------------------------------------------------------- */
@@ -150,6 +202,16 @@ export const PAGES: PageRecord[] = [
   /* -------------------------------------------------------------- */
   /* Your account                                                    */
   /* -------------------------------------------------------------- */
+  {
+    id: "login.account",
+    path: "/auth/account",
+    name: "Your sign-in",
+    purpose: "Sessions, signing out everywhere, authenticator, recovery codes, linked providers.",
+    audience: "member",
+    kind: "page",
+    file: "app/auth/account/page.tsx",
+    group: "Your account",
+  },
 
   /* -------------------------------------------------------------- */
   /* Staff                                                           */
@@ -167,6 +229,27 @@ export const PAGES: PageRecord[] = [
     audience: "public",
     kind: "machinery",
     file: "app/auth/sso/authorize/route.ts",
+    methods: ["GET"],
+    group: "Machinery",
+  },  {
+    id: "login.auth-api",
+    path: "/api/auth/[...all]",
+    name: "Sign-in engine",
+    purpose: "Better Auth, self-hosted: the endpoints the sign-in screens and the Google and Microsoft callbacks use.",
+    audience: "public",
+    kind: "machinery",
+    file: "app/api/auth/[...all]/route.ts",
+    methods: ["GET", "POST"],
+    group: "Machinery",
+  },
+  {
+    id: "login.healthz",
+    path: "/healthz",
+    name: "Healthcheck",
+    purpose: "Unauthenticated liveness for the platform. Answers ok and nothing else.",
+    audience: "public",
+    kind: "machinery",
+    file: "app/healthz/route.ts",
     methods: ["GET"],
     group: "Machinery",
   },

@@ -2,7 +2,9 @@ import "server-only";
 import { appendFile } from "node:fs/promises";
 
 /**
- * Delivery of sign-in codes.
+ * Delivery of one-time codes: signing in, verifying an address, resetting a
+ * password. Better Auth's email-OTP plugin generates and checks them (stored
+ * hashed); this only carries them.
  *
  * In production this goes through Resend. With no API key configured — local
  * development and tests — the code is written to the server log and to a file,
@@ -18,9 +20,24 @@ import { appendFile } from "node:fs/promises";
 const DEV_CODE_SINK =
   process.env.DEV_CODE_SINK ?? "/tmp/portal-signin-codes.log";
 
-export async function sendSignInCode(input: {
+export type CodePurpose = "sign-in" | "email-verification" | "forget-password";
+
+const SUBJECT: Record<CodePurpose, (code: string) => string> = {
+  "sign-in": (code) => `${code} is your 10XiD sign-in code`,
+  "email-verification": (code) => `${code} is your 10XiD verification code`,
+  "forget-password": (code) => `${code} is your 10XiD password reset code`,
+};
+
+const OPENING: Record<CodePurpose, string> = {
+  "sign-in": "Your sign-in code is",
+  "email-verification": "Your code to verify this address is",
+  "forget-password": "Your code to reset your password is",
+};
+
+export async function sendAuthCode(input: {
   to: string;
   code: string;
+  purpose: CodePurpose;
   expiresInMinutes: number;
 }): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
@@ -32,28 +49,29 @@ export async function sendSignInCode(input: {
           "Refusing to fall back to writing codes to disk in production.",
       );
     }
-    const line = `${new Date().toISOString()}\t${input.to}\t${input.code}\n`;
+    const line = `${new Date().toISOString()}\t${input.to}\t${input.code}\t${input.purpose}\n`;
     await appendFile(DEV_CODE_SINK, line, "utf8");
-    console.log(`[dev] sign-in code for ${input.to}: ${input.code}`);
+    console.log(`[dev] ${input.purpose} code for ${input.to}: ${input.code}`);
     return;
   }
 
   const { Resend } = await import("resend");
   const resend = new Resend(apiKey);
 
-  await resend.emails.send({
+  const { error } = await resend.emails.send({
     from: process.env.MAIL_FROM ?? "10XiD <no-reply@10xid.com>",
     to: input.to,
-    subject: `${input.code} is your sign-in code`,
+    subject: SUBJECT[input.purpose](input.code),
     text: [
-      `Your sign-in code is ${input.code}.`,
+      `${OPENING[input.purpose]} ${input.code}.`,
       ``,
       `It expires in ${input.expiresInMinutes} minutes and can be used once.`,
       ``,
-      `If you did not ask to sign in, you can ignore this message — the code`,
+      `If you did not ask for this, you can ignore this message — the code`,
       `is useless without access to this mailbox.`,
     ].join("\n"),
   });
+  if (error) throw new Error(`Resend refused the message: ${error.name}`);
 }
 
 /**
@@ -79,9 +97,9 @@ export async function sendInvitation(input: {
     `To set up your account, go to:`,
     `  ${input.signUpUrl}`,
     ``,
-    `Enter this address and we will email you a six-digit code. After that you`,
-    `will set up an authenticator app, which is how you will sign in from then`,
-    `on — there is no password.`,
+    `Use this address: we will email it a code (or continue with Google or`,
+    `Microsoft if it is your work account). You will then set up an authenticator`,
+    `app, which 10XiD asks for every time you sign in, and can add a password.`,
     ``,
     `If you were not expecting this, you can ignore it. The invitation grants`,
     `nothing on its own and lapses on its own.`,

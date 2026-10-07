@@ -85,7 +85,7 @@ export default defineConfig({
   webServer: [
     {
       command: "npm run dev",
-      url: `http://${PRIMARY}/auth/login`,
+      url: `http://${PRIMARY}/healthz`,
       reuseExistingServer: true,
       timeout: 120_000,
       env: { PORTAL_HOST: APP },

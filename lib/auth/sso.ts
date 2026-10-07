@@ -43,14 +43,14 @@ export const PORTAL_HOST = (process.env.PORTAL_HOST ?? "").toLowerCase();
 /**
  * The sign-in form, as a full address on the login host.
  *
- * Server code sends people here rather than to a bare "/auth/login" because a
+ * Server code sends people here rather than to a bare "/auth/sign-in" because a
  * server action's redirect to a path is rendered within the same request, on
  * the host the action ran on, without passing through proxy.ts. From the portal
  * that would draw a sign-in form on a host that must not have one. A full
  * address is a real navigation, so it lands on the login host.
  */
 export function signInUrl(): string {
-  return PRIMARY_HOST ? `${originFor(PRIMARY_HOST)}/auth/login` : "/auth/login";
+  return PRIMARY_HOST ? `${originFor(PRIMARY_HOST)}/auth/sign-in` : "/auth/sign-in";
 }
 
 /**

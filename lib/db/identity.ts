@@ -927,7 +927,10 @@ export async function mintTicket(input: {
   userId: string;
   audienceHost: string;
   returnPath: string;
-  sourceSessionId: string;
+  /** The legacy login-host session; unused since 0022. */
+  sourceSessionId?: string | null;
+  /** The Better Auth session the person signed in with. */
+  sourceAuthSessionId?: string | null;
   expiresAt: Date;
 }) {
   const rows = await db.insert(ssoTickets).values(input).returning();
@@ -947,7 +950,12 @@ export async function mintTicket(input: {
 export async function redeemTicket(
   ticketHash: Buffer,
   audienceHost: string,
-): Promise<{ userId: string; returnPath: string; sourceSessionId: string } | null> {
+): Promise<{
+  userId: string;
+  returnPath: string;
+  sourceSessionId: string | null;
+  sourceAuthSessionId: string | null;
+} | null> {
   const rows = await db
     .update(ssoTickets)
     .set({ consumedAt: new Date() })
@@ -963,8 +971,19 @@ export async function redeemTicket(
       userId: ssoTickets.userId,
       returnPath: ssoTickets.returnPath,
       sourceSessionId: ssoTickets.sourceSessionId,
+      sourceAuthSessionId: ssoTickets.sourceAuthSessionId,
     });
   return rows[0] ?? null;
+}
+
+/** Signing out of the login host kills tickets still in flight from that sign-in. */
+export async function consumeTicketsForAuthSession(authSessionId: string) {
+  await db
+    .update(ssoTickets)
+    .set({ consumedAt: new Date() })
+    .where(
+      and(eq(ssoTickets.sourceAuthSessionId, authSessionId), isNull(ssoTickets.consumedAt)),
+    );
 }
 
 /**

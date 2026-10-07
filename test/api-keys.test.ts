@@ -9,7 +9,7 @@ import {
   touchKey,
 } from "@/lib/db/api-keys";
 import { closePool } from "@/lib/db/connection";
-import { verifySignInCode } from "@/lib/auth/codes";
+import { mayCreateSignIn } from "@/lib/db/accounts";
 
 /**
  * Keys for machines, held to the same rule as people.
@@ -252,7 +252,7 @@ describe("revoking", () => {
 });
 
 describe("the service account behind a key", () => {
-  test("cannot be signed in as, even with a valid code", async () => {
+  test("cannot be signed in as: no sign-in identity may exist for it", async () => {
     const minted = await mintKey({
       organizationId: northstarId,
       label: "Northstar — sign-in refusal test",
@@ -260,23 +260,10 @@ describe("the service account behind a key", () => {
     });
     const identified = (await identifyKey(minted.secret))!;
 
-    // Write a live, correct code straight into the table for the service
-    // account's address — i.e. assume the attacker has already won every step
-    // that precedes verification. It must still not produce a session.
-    const code = "424242";
-    const { createHash } = await import("node:crypto");
-    const hash = createHash("sha256")
-      .update(`${identified.serviceEmail.toLowerCase()}:${code}`, "utf8")
-      .digest();
-
-    await owner.query(
-      `insert into sign_in_codes (email, code_hash, expires_at)
-       values ($1, $2, now() + interval '10 minutes')`,
-      [identified.serviceEmail, hash],
-    );
-
-    const result = await verifySignInCode(identified.serviceEmail, code);
-    expect(result.ok).toBe(false);
+    // The login host creates a sign-in identity only for an invited address or
+    // a human account; a service account's address is neither, so no password,
+    // emailed code or provider can ever be attached to it.
+    expect(await mayCreateSignIn(identified.serviceEmail)).toBe(false);
   });
 
   test("its address is on a domain that can never receive mail", async () => {

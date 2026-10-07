@@ -5,9 +5,9 @@ migrations. The portal itself — dashboard, jobs, the staff workspace, team and
 screens — is [`10xid-com/app`](https://github.com/10xid-com/app), at **`app.10xid.com`** and on
 the client domains.
 
-This app shows only `/auth/*`: sign-in, accepting an invitation, the emailed code, the
-staff authenticator and recovery codes, and `/auth/sso/authorize`, where the cross-domain
-handoff mints its ticket. Any other address is sent to the portal (`PORTAL_HOST`), and
+This app shows only `/auth/*` (plus `/api/auth/*` and `/healthz`): sign-in, creating a
+sign-in for an invitation, emailed codes, the authenticator and recovery codes, the account's
+sessions, and `/auth/sso/authorize`, where the cross-domain handoff mints its ticket. Any other address is sent to the portal (`PORTAL_HOST`), and
 signing in ends there. A portal host or client domain with no session sends the browser
 here and gets it back signed in, with no second prompt.
 
@@ -40,37 +40,45 @@ select id, 'app.10xid.com', false, now() from organizations where type = 'intern
 prefixed and so is never shared between them. That is deliberate — a cookie scoped to
 `.10xid.com` could be read or overwritten by any other subdomain.
 
-## WorkOS (from 2026-10-07)
+## Sign-in: self-hosted Better Auth (0022)
 
-Sign-in is moving to **WorkOS AuthKit**, built in `10xid-com/app` with its one callback at
-`https://app.10xid.com/callback`. Once that is live and `login.10xid.com` points at WorkOS's
-hosted sign-in, the sign-in screens below are retired; this repository keeps the schema, the
-migrations and the operator scripts.
+Sign-in runs **here**, on Railway, with no authentication provider: [Better Auth](https://better-auth.com)
+(MIT) under `/api/auth`, behind this app's own branded pages under `/auth/*`. Password,
+emailed codes (through Resend), Google and Microsoft — and an authenticator app after **every**
+one of them. A signed-in, authenticator-verified identity that is bound to a portal account is
+handed to `app.10xid.com` by the existing single-use ticket handoff; being signed in grants
+nothing by itself.
 
-Migration `0021_workos_identity` adds what the app needs: `users.workos_user_id` (the identity
-key, set once — only an operator binds an existing account, enforced by a trigger),
-`identity_bindings` (the request an account from before WorkOS makes on its first WorkOS sign-in),
-and the six role templates on `membership_role`. Invitations now last seven days.
+Its tables (`auth_*`) belong to their own restricted role, `portal_auth` (`AUTH_DATABASE_URL`);
+the portal's role cannot read them. The seven-day maximum and 48-hour inactivity limit are
+enforced by Postgres. The full design, the Railway variables, provider setup, deployment order
+and rollback are in **[`docs/better-auth-cutover.md`](docs/better-auth-cutover.md)**.
 
-An operator answers binding requests, connecting as the owner:
+An operator answers binding requests (an account from before, signing in for the first time),
+connecting as the owner:
 
 ```bash
 npm run identity:bindings -- list
 npm run identity:bindings -- confirm <request id> --operator "Full Name"
 npm run identity:bindings -- reject  <request id> --operator "Full Name"
+npm run identity:bindings -- reset-authenticator <email> --operator "Full Name"
+npm run identity:bindings -- sign-out-everywhere <email> --operator "Full Name"
 ```
 
 Confirm only after checking with the person by another channel (a call to a number already on
 file) that they are the one who just signed in.
+
+The tests: `test/better-auth.test.ts` (the engine, the gate, the clocks, revocation, tickets, as
+each database role) and `test/e2e/better-auth.spec.ts` (both hosts in a real browser).
 
 ## What it does
 
 - **Sign in once** at the login host, then land already signed in on a site at a
   **genuinely different registrable domain**, with no second prompt, via a single-use
   ticket handoff.
-- **No passwords anywhere.** A first-time account gets a six-digit emailed code; once an
-  authenticator is enrolled, that code is what signs the account in and **the emailed code
-  stops working for it**. Ten single-use recovery codes are issued at enrolment.
+- **An authenticator after every way in.** Password, emailed code, Google or Microsoft is
+  only the first step; the second is always an authenticator app, with ten single-use
+  recovery codes issued at enrolment.
 - **Accounts are by invitation**, never by open registration — a portal holds several
   companies' data, and an address typed into a form says nothing about which company its
   owner belongs to.
