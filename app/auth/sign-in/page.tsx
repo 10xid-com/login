@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "Sign in" };
 
 const ERRORS: Record<string, string> = {
   invalid: "That email and password do not match an account that can sign in.",
-  rate: "Too many attempts. Wait a minute and try again.",
+  rate: "Too many attempts. Wait a few minutes and try again.",
   provider: "That sign-in did not complete. Try again, or use another way to sign in.",
   account_not_linked:
     "That address already signs in another way. Sign in that way, then link the provider from your account.",

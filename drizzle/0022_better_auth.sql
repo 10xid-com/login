@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS "auth_sessions" (
   "ip_address" text,
   "user_agent" text,
   "mfa_verified_at" timestamp with time zone,
+  "first_factor" text,
   "last_active_at" timestamp with time zone,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -113,6 +114,7 @@ CREATE TABLE IF NOT EXISTS "auth_two_factors" (
   "failed_verification_count" integer DEFAULT 0 NOT NULL,
   "locked_until" timestamp with time zone,
   "last_used_step" bigint,
+  "enrolling_session_id" text,
   CONSTRAINT "auth_two_factors_user_id_unique" UNIQUE ("user_id"),
   CONSTRAINT "auth_two_factors_user_id_auth_users_id_fk"
     FOREIGN KEY ("user_id") REFERENCES "public"."auth_users"("id") ON DELETE cascade
@@ -144,7 +146,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON auth_users, auth_sessions, auth_accounts
 --     expires_at at seven days, and clears mfa_verified_at — a new session
 --     never starts as having passed the authenticator, whatever a caller
 --     copies into it;
---   * on UPDATE created_at, user_id and token cannot change, expires_at is
+--   * on UPDATE created_at, user_id, token and first_factor cannot change, expires_at is
 --     capped at created_at + 7 days (so activity never extends the maximum),
 --     and last_active_at becomes now() — every refresh is activity;
 --   * a policy hides from portal_auth any session past its expiry or idle for
@@ -168,6 +170,7 @@ BEGIN
     NEW.created_at := OLD.created_at;
     NEW.user_id := OLD.user_id;
     NEW.token := OLD.token;
+    NEW.first_factor := OLD.first_factor;
     NEW.expires_at := least(NEW.expires_at, OLD.created_at + interval '7 days');
     NEW.last_active_at := now();
   END IF;
@@ -180,9 +183,13 @@ CREATE TRIGGER auth_sessions_enforce_clocks
   BEFORE INSERT OR UPDATE ON "auth_sessions"
   FOR EACH ROW EXECUTE FUNCTION auth_sessions_enforce_clocks();--> statement-breakpoint
 
+-- SECURITY DEFINER: as portal_auth the dead rows are exactly the ones its
+-- policy hides, so they could never be found to delete.
 CREATE OR REPLACE FUNCTION auth_sessions_purge_dead()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 BEGIN
   DELETE FROM auth_sessions

@@ -1695,6 +1695,12 @@ export const authSessions = pgTable(
     ipAddress: text("ip_address"),
     userAgent: text("user_agent"),
     mfaVerifiedAt: timestamp("mfa_verified_at", { withTimezone: true }),
+    /**
+     * How the first step was proven: "password", "email-otp" or "social".
+     * Setting up an authenticator needs a session that proved the mailbox
+     * (an emailed code, or Google / Microsoft vouching for the address).
+     */
+    firstFactor: text("first_factor"),
     lastActiveAt: timestamp("last_active_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1764,6 +1770,8 @@ export const authTwoFactors = pgTable(
     lockedUntil: timestamp("locked_until", { withTimezone: true }),
     /** The last 30-second step a code was accepted for; a code is never accepted twice. */
     lastUsedStep: bigint("last_used_step", { mode: "number" }),
+    /** The one session that may confirm an unconfirmed secret, and see it. */
+    enrollingSessionId: text("enrolling_session_id"),
   },
   (t) => [index("auth_two_factors_secret_idx").on(t.secret)],
 );

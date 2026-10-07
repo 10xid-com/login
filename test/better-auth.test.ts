@@ -130,20 +130,36 @@ function totp(uri: string, at = Date.now()): string {
   return bin.toString().padStart(6, "0");
 }
 
-/** Invited, signed up, address confirmed, signed in with the password. Not past the authenticator. */
+/** Sign in with an emailed code (the only way an identity is created). */
+async function signInWithCode(b: Browser, email: string) {
+  await b.call("/email-otp/send-verification-otp", { email, type: "sign-in" });
+  const r = await b.call("/sign-in/email-otp", { email, otp: lastCode(email, "sign-in") });
+  expect(r.status).toBe(200);
+}
+
+/** What "Add password" on the account page does (Better Auth's server-only setPassword). */
+async function addPassword(email: string, password = PASSWORD) {
+  const ctx = await getAuth().$context;
+  const id = (await authUserId(email))!;
+  await ctx.internalAdapter.createAccount({
+    userId: id,
+    providerId: "credential",
+    accountId: id,
+    password: await ctx.password.hash(password),
+  });
+}
+
+/**
+ * Invited, signed in once with an emailed code (which created the identity),
+ * a password added. Returns that first browser — signed in, not past the
+ * authenticator.
+ */
 async function invitedAndSignedIn(label: string, role: "owner" | "member" = "member") {
   const email = address(label);
   await inviteToOrganization({ organizationId: orgId, email, role, invitedBy: inviterId });
   const b = new Browser();
-  const up = await b.call("/sign-up/email", { email, password: PASSWORD, name: label });
-  expect(up.status).toBe(200);
-  const verified = await b.call("/email-otp/verify-email", {
-    email,
-    otp: lastCode(email, "email-verification"),
-  });
-  expect(verified.status).toBe(200);
-  const signedIn = await b.call("/sign-in/email", { email, password: PASSWORD });
-  expect(signedIn.status).toBe(200);
+  await signInWithCode(b, email);
+  await addPassword(email);
   return { b, email };
 }
 
@@ -235,21 +251,25 @@ describe("only invited addresses get an identity", () => {
     expect(await authUserId(email)).toBeNull();
   });
 
-  test("an invited address can sign up, but cannot sign in until it is confirmed", async () => {
-    const email = address("unconfirmed");
+  test("there is no password sign-up and no confirm-by-code: an identity starts from a proven mailbox", async () => {
+    const email = address("nosignup");
     await inviteToOrganization({ organizationId: orgId, email, role: "member", invitedBy: inviterId });
     const b = new Browser();
-    expect((await b.call("/sign-up/email", { email, password: PASSWORD, name: "U" })).status).toBe(200);
-    const early = await b.call("/sign-in/email", { email, password: PASSWORD });
-    expect(early.status).toBe(403);
-    expect(early.json.code).toBe("EMAIL_NOT_VERIFIED");
-    expect(await b.session()).toBeNull();
+    expect((await b.call("/sign-up/email", { email, password: PASSWORD, name: "N" })).status).toBe(404);
+    expect((await b.call("/email-otp/verify-email", { email, otp: "123456" })).status).toBe(404);
+    expect(await authUserId(email)).toBeNull();
+    await signInWithCode(b, email);
+    const { rows } = await owner.query("select email_verified from auth_users where email = $1", [email]);
+    expect(rows[0].email_verified).toBe(true);
   });
+
 });
 
 describe("the authenticator is required after every way of signing in", () => {
   test("password: signed in, but every endpoint except finishing sign-in answers 403", async () => {
-    const { b } = await invitedAndSignedIn("gate-password");
+    const { email } = await invitedAndSignedIn("gate-password");
+    const b = new Browser();
+    expect((await b.call("/sign-in/email", { email, password: PASSWORD })).status).toBe(200);
     const s = await b.session();
     expect(s?.session.mfaVerifiedAt ?? null).toBeNull();
     const blocked = await b.call("/list-sessions");
@@ -368,13 +388,93 @@ describe("the authenticator is required after every way of signing in", () => {
   });
 });
 
+describe("review hardening", () => {
+  test("a password sign-in cannot set up an authenticator: that needs a proven mailbox", async () => {
+    const { email } = await invitedAndSignedIn("enrol-password");
+    const b = new Browser();
+    await b.call("/sign-in/email", { email, password: PASSWORD });
+    const r = await b.call("/mfa/start-enrollment", {});
+    expect(r.status).toBe(403);
+    expect(r.json.code).toBe("MAILBOX_PROOF_REQUIRED");
+  });
+
+  test("only the session that started an enrolment can see or confirm it", async () => {
+    const { b, email } = await invitedAndSignedIn("enrol-bound");
+    const started = await b.call("/mfa/start-enrollment", {});
+    const uri = started.json.totpURI as string;
+    const other = new Browser();
+    await signInWithCode(other, email);
+    expect((await other.call("/mfa/confirm-enrollment", { code: totp(uri) })).json.code).toBe("MFA_NO_PENDING_ENROLLMENT");
+    expect((await b.call("/mfa/confirm-enrollment", { code: totp(uri) })).status).toBe(200);
+  });
+
+  test("confirming a new authenticator, a recovery code or a reset ends every other session", async () => {
+    const { b, email } = await invitedAndSignedIn("others-end");
+    const bystander = new Browser();
+    await bystander.call("/sign-in/email", { email, password: PASSWORD });
+    const { recoveryCodes, uri } = await enroll(b);
+    expect(await bystander.session()).toBeNull();
+
+    const thief = new Browser();
+    await thief.call("/sign-in/email", { email, password: PASSWORD });
+    await thief.call("/mfa/verify", { code: totp(uri, Date.now() + 30_000) });
+    expect((await thief.call("/list-sessions")).status).toBe(200);
+    const owner2 = new Browser();
+    await owner2.call("/sign-in/email", { email, password: PASSWORD });
+    expect((await owner2.call("/mfa/recover", { code: recoveryCodes[0] })).status).toBe(200);
+    expect(await thief.session()).toBeNull();
+    expect(await b.session()).toBeNull();
+  });
+
+  test("parallel guesses cannot outrun the lockout", async () => {
+    const { b, email } = await invitedAndSignedIn("race");
+    await enroll(b);
+    const guesser = new Browser();
+    await guesser.call("/sign-in/email", { email, password: PASSWORD });
+    await owner.query("delete from auth_rate_limits");
+    const results = await Promise.all(
+      Array.from({ length: 20 }, (_, i) => guesser.call("/mfa/verify", { code: String(100000 + i) })),
+    );
+    // Better Auth's own HTTP limit (10 a minute on /mfa/*) may answer some
+    // first; of those that reached the check, no more than ten were judged.
+    const judged = results.filter((r) => r.status === 401).length;
+    expect(judged).toBeLessThanOrEqual(10);
+    const { rows } = await owner.query(
+      "select failed_verification_count from auth_two_factors where user_id = (select id from auth_users where email = $1)",
+      [email],
+    );
+    expect(rows[0].failed_verification_count).toBe(judged);
+  });
+
+  test("dead sessions are purged when the same person signs in again", async () => {
+    const { b, email } = await invitedAndSignedIn("purge");
+    const dead = (await b.session())!.session.id as string;
+    await owner.query("begin");
+    await owner.query("set local session_replication_role = replica");
+    await owner.query("update auth_sessions set last_active_at = now() - interval '3 days' where id = $1", [dead]);
+    await owner.query("commit");
+    await signInWithCode(new Browser(), email);
+    const { rows } = await owner.query("select 1 from auth_sessions where id = $1", [dead]);
+    expect(rows).toHaveLength(0);
+  });
+
+  test("the link-based reset is closed, templated path included", async () => {
+    const b = new Browser();
+    expect((await b.call("/reset-password/sometoken?callbackURL=%2F")).status).toBe(404);
+    expect((await b.call("/request-password-reset", { email: address("x") })).status).toBe(404);
+  });
+});
+
 describe("proving an address wipes what came before it", () => {
   test("someone else's password, provider link and authenticator do not survive the owner's first emailed code", async () => {
+    // These pages can no longer create an unproven identity; this is the
+    // database's own guarantee, for one that got there any other way.
     const email = address("prehijack");
     await inviteToOrganization({ organizationId: orgId, email, role: "member", invitedBy: inviterId });
     const attacker = new Browser();
-    await attacker.call("/sign-up/email", { email, password: "attacker-chosen-password", name: "Mallory" });
-    const id = (await authUserId(email))!;
+    const id = `planted-${TAG}`;
+    await owner.query("insert into auth_users (id, name, email, email_verified) values ($1, 'Mallory', $2, false)", [id, email]);
+    await addPassword(email, "attacker-chosen-password");
     await owner.query(
       `insert into auth_two_factors (id, user_id, secret, backup_codes, verified) values ($1, $2, 'x', 'x', true)`,
       [randomUUID(), id],

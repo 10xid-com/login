@@ -73,7 +73,7 @@ describe("with PORTAL_HOST: the login host keeps only sign-in", () => {
   test("the sign-in screens and the handoff stay on the login host", () => {
     for (const path of [
       "/auth/sign-in",
-      "/auth/verify-email?email=a%40b.test",
+      "/auth/reset-password?email=a%40b.test",
       "/auth/mfa",
       "/auth/sso/authorize?site=x&state=y",
     ]) {
@@ -119,8 +119,8 @@ describe("sign-in screens exist on the login host only", () => {
       expect(target(visit(CLIENT, "/auth/sign-up?next=%2F"))).toBe(
         `https://${LOGIN}/auth/sign-up?next=%2F`,
       );
-      expect(target(visit(PORTAL, "/auth/verify-email?email=a%40b.test", { session: true }))).toBe(
-        `https://${LOGIN}/auth/verify-email?email=a%40b.test`,
+      expect(target(visit(PORTAL, "/auth/reset-password?email=a%40b.test", { session: true }))).toBe(
+        `https://${LOGIN}/auth/reset-password?email=a%40b.test`,
       );
     });
   }

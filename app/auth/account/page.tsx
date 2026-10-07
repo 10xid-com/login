@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { configuredProviders, getAuth } from "@/lib/auth/auth";
 import { authenticatorState, getLoginSession } from "@/lib/auth/login";
 import {
+  setPasswordAction,
   linkProviderAction,
   regenerateRecoveryCodesAction,
   resetAuthenticatorAction,
@@ -11,7 +12,7 @@ import {
   signOutAction,
   signOutEverywhereAction,
 } from "../identity-actions";
-import { AuthCard, FieldError } from "../auth-card";
+import { AuthCard, FieldError, inputClass, labelClass } from "../auth-card";
 import { Hidden, Notice, SecondaryButton, TextLink } from "../flow-ui";
 
 export const metadata: Metadata = { title: "Your sign-in" };
@@ -19,11 +20,15 @@ export const metadata: Metadata = { title: "Your sign-in" };
 const NOTICES: Record<string, string> = {
   revoked: "That session is signed out.",
   linked: "Linked. You can now sign in that way too — your authenticator is still required.",
+  password: "Password saved. Any other sessions have been signed out.",
 };
 const ERRORS: Record<string, string> = {
   fresh: "For this, confirm with your authenticator again first: sign out and sign back in.",
   link: "That provider could not be linked. Its address must match this one.",
   failed: "That did not work. Try again.",
+  password: "Choose a password of at least 12 characters.",
+  current: "That is not your current password.",
+  rate: "Too many attempts. Wait a few minutes and try again.",
 };
 
 /** Sessions, authenticator and recovery codes, and signing out — all on the login host. */
@@ -44,6 +49,7 @@ export default async function AccountPage({
     authenticatorState(session.user.id),
   ]);
   const linked = new Set(accounts.map((a) => a.providerId));
+  const hasPassword = linked.has("credential");
   const linkable = configuredProviders().filter((p) => !linked.has(p));
   const notice =
     params.notice === "recovered"
@@ -86,6 +92,22 @@ export default async function AccountPage({
       </form>
       <form action={resetAuthenticatorAction} className="mt-3">
         <SecondaryButton>Replace authenticator</SecondaryButton>
+      </form>
+
+      <h2 className="mt-6 text-sm font-semibold text-ink">Password</h2>
+      <form action={setPasswordAction} className="mt-2">
+        {hasPassword ? (
+          <>
+            <label htmlFor="current" className={labelClass}>Current password</label>
+            <input id="current" name="current" type="password" autoComplete="current-password" required className={inputClass} />
+          </>
+        ) : (
+          <p className="text-sm text-ink-soft">No password yet. You can sign in with an emailed code, or add one here.</p>
+        )}
+        <label htmlFor="password" className={`${labelClass} mt-3`}>{hasPassword ? "New password" : "Password"}</label>
+        <input id="password" name="password" type="password" autoComplete="new-password" minLength={12} maxLength={128}
+          required className={inputClass} />
+        <SecondaryButton>{hasPassword ? "Change password" : "Add password"}</SecondaryButton>
       </form>
 
       {linkable.length > 0 ? (

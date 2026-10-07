@@ -71,6 +71,7 @@ async function enrolFromPage(page: Page): Promise<{ secret: string; used: string
   }
   const secret = (await page.locator("p.font-mono").innerText()).replace(/\s+/g, "");
   const used = totpCode(secret);
+  lastStep.set(secret, Math.floor(Date.now() / 30_000));
   await page.getByLabel("Code").fill(used);
   await page.getByRole("button", { name: "Confirm" }).click();
   await expect(page).toHaveURL(/\/auth\/mfa\/recovery-codes/);
@@ -79,11 +80,36 @@ async function enrolFromPage(page: Page): Promise<{ secret: string; used: string
   return { secret, used, recoveryCodes: await items.allInnerTexts() };
 }
 
+/**
+ * A code the server will accept: the earliest 30-second step inside its
+ * one-step window that is later than any step already used for this secret
+ * (each step is accepted once, ever).
+ */
+const lastStep = new Map<string, number>();
+async function freshCode(secret: string): Promise<string> {
+  // Like a person waiting for the app to show the next code.
+  for (;;) {
+    const now = Math.floor(Date.now() / 30_000);
+    const step = Math.max(now - 1, (lastStep.get(secret) ?? -Infinity) + 1);
+    if (step <= now + 1) {
+      lastStep.set(secret, step);
+      return totpCode(secret, step * 30_000);
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
 async function cookieNames(context: BrowserContext, origin: string) {
   return (await context.cookies(origin)).map((c) => c.name);
 }
 
 test.describe.configure({ mode: "serial" });
+
+// Rate limits are per client address, and this whole suite is one address;
+// each test starts from zero rather than the limits being raised for tests.
+test.beforeEach(async () => {
+  await sql("delete from auth_rate_limits");
+});
 
 test.beforeAll(async () => {
   const [org] = await sql<{ id: string }>(
@@ -93,29 +119,22 @@ test.beforeAll(async () => {
   orgId = org!.id;
 });
 
-test("password sign-up → address confirmed → authenticator required → handed to the portal", async ({ page, context }) => {
+test("invited: emailed code → authenticator required → portal; then a password, which also needs the authenticator", async ({ page, context }) => {
   const email = await invite("owner");
 
   // A visit to the portal goes to the login host, by the handoff.
   await page.goto(`${APP}/dashboard`);
   await expect(page).toHaveURL(new RegExp(`^${LOGIN}/auth/sign-in\\?next=%2Fauth%2Fsso%2Fauthorize`));
 
+  // Creating a sign-in is proving the mailbox: an emailed code.
   await page.getByRole("link", { name: "Create your sign-in" }).click();
-  await page.getByLabel("Name").fill("E2E Owner");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Create sign-in" }).click();
-
-  await expect(page).toHaveURL(/\/auth\/verify-email/);
-  await page.getByLabel("Code").fill(await codeFor(email, "email-verification"));
-  await page.getByRole("button", { name: "Confirm" }).click();
-
-  await expect(page).toHaveURL(/\/auth\/sign-in\?.*notice=verified/);
-  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Email me a code" }).click();
+  await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
   await page.getByRole("button", { name: "Continue" }).click();
 
-  // Signed in with a password — and stopped at the authenticator.
-  await enrolFromPage(page);
+  // Signed in — and stopped at the authenticator.
+  const { secret } = await enrolFromPage(page);
   await page.getByRole("button", { name: /saved them/ }).click();
 
   // The invitation is accepted, the ticket minted and spent: on the portal.
@@ -148,6 +167,30 @@ test("password sign-up → address confirmed → authenticator required → hand
   await expect(page).toHaveURL(/\/auth\/sign-in\?notice=signed-out/);
   await page.goto(`${APP}/dashboard`);
   await expect(page).toHaveURL(new RegExp(`^${LOGIN}/auth/sign-in`));
+
+  // Add a password: only from a signed-in session past the authenticator.
+  await page.goto(`${LOGIN}/auth/sign-in/code`);
+  await page.getByLabel("Email").fill(email);
+  await page.getByRole("button", { name: "Email me a code" }).click();
+  await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByLabel("Code").fill(await freshCode(secret));
+  await page.getByRole("button", { name: "Verify" }).click();
+  await page.goto(`${LOGIN}/auth/account`);
+  await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  await page.getByRole("button", { name: "Add password" }).click();
+  await expect(page).toHaveURL(/notice=password/);
+  await page.getByRole("button", { name: "Sign out", exact: true }).last().click();
+
+  // Password sign-in: still the authenticator before the portal.
+  await page.goto(`${APP}/dashboard`);
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page).toHaveURL(/\/auth\/mfa\?/);
+  await page.getByLabel("Code").fill(await freshCode(secret));
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(page).toHaveURL(`${APP}/dashboard`);
 });
 
 test("emailed code: still the authenticator, and a used code is not accepted twice", async ({ page }) => {
@@ -174,7 +217,7 @@ test("emailed code: still the authenticator, and a used code is not accepted twi
   await page.getByLabel("Code").fill(used);
   await page.getByRole("button", { name: "Verify" }).click();
   await expect(page.getByRole("alert")).toContainText("not right");
-  await page.getByLabel("Code").fill(totpCode(secret, Date.now() + 30_000));
+  await page.getByLabel("Code").fill(await freshCode(secret));
   await page.getByRole("button", { name: "Verify" }).click();
   await expect(page).toHaveURL(new RegExp(`^${APP}/`));
 });
@@ -182,12 +225,11 @@ test("emailed code: still the authenticator, and a used code is not accepted twi
 test("an address nobody invited gets nothing — not even an email", async ({ page }) => {
   const email = `stranger-${TAG}@test.invalid`;
   await page.goto(`${LOGIN}/auth/sign-up`);
-  await page.getByLabel("Name").fill("Stranger");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Create sign-in" }).click();
+  await page.getByRole("button", { name: "Email me a code" }).click();
   // The same screen an invited address sees.
-  await expect(page).toHaveURL(/\/auth\/verify-email/);
+  await expect(page).toHaveURL(/\/auth\/sign-in\/code\?email=/);
+  await page.waitForTimeout(500);
   expect(await codesSentTo(email)).toBe(0);
   expect(await sql("select 1 from auth_users where email = $1", [email])).toHaveLength(0);
 });

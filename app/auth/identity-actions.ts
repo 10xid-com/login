@@ -6,6 +6,7 @@ import { APIError } from "better-auth/api";
 import { z } from "zod";
 import { configuredProviders, getAuth, type SocialProvider } from "@/lib/auth/auth";
 import { forgetRecoveryCodes, showRecoveryCodesOnce } from "@/lib/auth/recovery-codes-once";
+import { allow } from "@/lib/auth/throttle";
 import {
   assertLoginOrigin,
   getLoginSession,
@@ -27,8 +28,9 @@ import { eq } from "drizzle-orm";
  * Every step of signing in on login.10xid.com, as server actions.
  *
  * Each one checks the request came from this host's own pages
- * (assertLoginOrigin), then calls Better Auth in-process, so its cookies are
- * set on the response by the nextCookies plugin. Errors come back to the page
+ * (assertLoginOrigin) and counts against its rate limits (lib/auth/throttle —
+ * Better Auth's own run only for HTTP calls), then calls Better Auth
+ * in-process, so its cookies are set on the response by the nextCookies plugin. Errors come back to the page
  * as a short code in the query string; the pages turn codes into sentences, and
  * never say whether an address has an account.
  */
@@ -73,16 +75,12 @@ export async function signInWithPasswordAction(form: FormData) {
   const address = email.safeParse(form.get("email"));
   const secret = z.string().min(1).max(128).safeParse(form.get("password"));
   if (!address.success || !secret.success) to("/auth/sign-in", { error: "invalid", next });
+  if (!(await allow("password", address.data))) to("/auth/sign-in", { error: "rate", next });
 
   const result = await call((h) =>
     getAuth().api.signInEmail({ body: { email: address.data, password: secret.data }, headers: h }),
   );
-  if (!result.ok) {
-    if (result.code === "EMAIL_NOT_VERIFIED") {
-      to("/auth/verify-email", { email: address.data, next, notice: "sent" });
-    }
-    to("/auth/sign-in", { error: result.code === "TOO_MANY_REQUESTS" || result.code === "429" ? "rate" : "invalid", next });
-  }
+  if (!result.ok) to("/auth/sign-in", { error: "invalid", next });
   to("/auth/mfa", { next });
 }
 
@@ -91,6 +89,7 @@ export async function requestSignInCodeAction(form: FormData) {
   const next = safeNext(form.get("next"));
   const address = email.safeParse(form.get("email"));
   if (!address.success) to("/auth/sign-in/code", { error: "email", next });
+  if (!(await allow("requestCode", address.data))) to("/auth/sign-in/code", { error: "rate", next });
 
   // The same answer whether or not the address can sign in: an identity is
   // only ever created for an invited address (lib/auth/auth.ts), and the page
@@ -111,6 +110,7 @@ export async function signInWithCodeAction(form: FormData) {
   const code = otp.safeParse(form.get("code"));
   if (!address.success) to("/auth/sign-in/code", { error: "email", next });
   if (!code.success) to("/auth/sign-in/code", { email: address.data, error: "code", next });
+  if (!(await allow("useCode", address.data))) to("/auth/sign-in/code", { email: address.data, error: "rate", next });
 
   const result = await call((h) =>
     getAuth().api.signInEmailOTP({ body: { email: address.data, otp: code.data }, headers: h }),
@@ -122,65 +122,11 @@ export async function signInWithCodeAction(form: FormData) {
   to("/auth/mfa", { next });
 }
 
-export async function signUpAction(form: FormData) {
-  await assertLoginOrigin();
-  const next = safeNext(form.get("next"));
-  const address = email.safeParse(form.get("email"));
-  const name = z.string().trim().min(1).max(120).safeParse(form.get("name"));
-  const secret = password.safeParse(form.get("password"));
-  if (!address.success || !name.success) to("/auth/sign-up", { error: "invalid", next });
-  if (!secret.success) to("/auth/sign-up", { error: "password", next });
-
-  const result = await call((h) =>
-    getAuth().api.signUpEmail({
-      body: { email: address.data, password: secret.data, name: name.data },
-      headers: h,
-    }),
-  );
-  if (!result.ok && (result.code === "PASSWORD_TOO_SHORT" || result.code === "PASSWORD_TOO_LONG")) {
-    to("/auth/sign-up", { error: "password", next });
-  }
-  // Invited or not, new or not: the same next screen.
-  to("/auth/verify-email", { email: address.data, next, notice: "sent" });
-}
-
-export async function sendVerificationCodeAction(form: FormData) {
-  await assertLoginOrigin();
-  const next = safeNext(form.get("next"));
-  const address = email.safeParse(form.get("email"));
-  if (!address.success) to("/auth/verify-email", { error: "email", next });
-  await call((h) =>
-    getAuth().api.sendVerificationOTP({
-      body: { email: address.data, type: "email-verification" },
-      headers: h,
-    }),
-  );
-  to("/auth/verify-email", { email: address.data, next, notice: "sent" });
-}
-
-export async function verifyEmailAction(form: FormData) {
-  await assertLoginOrigin();
-  const next = safeNext(form.get("next"));
-  const address = email.safeParse(form.get("email"));
-  const code = otp.safeParse(form.get("code"));
-  if (!address.success) to("/auth/verify-email", { error: "email", next });
-  if (!code.success) to("/auth/verify-email", { email: address.data, error: "code", next });
-
-  const result = await call((h) =>
-    getAuth().api.verifyEmailOTP({ body: { email: address.data, otp: code.data }, headers: h }),
-  );
-  if (!result.ok) to("/auth/verify-email", { email: address.data, error: "code", next });
-
-  // Verifying from a signed-in session (a provider sign-in) carries on to the
-  // access check; otherwise the person signs in now that the address counts.
-  if (await getLoginSession()) to("/auth/access", { next });
-  to("/auth/sign-in", { notice: "verified", email: address.data, next });
-}
-
 export async function requestPasswordResetAction(form: FormData) {
   await assertLoginOrigin();
   const address = email.safeParse(form.get("email"));
   if (!address.success) to("/auth/forgot-password", { error: "email" });
+  if (!(await allow("requestReset", address.data))) to("/auth/forgot-password", { error: "rate" });
   const result = await call((h) =>
     getAuth().api.requestPasswordResetEmailOTP({ body: { email: address.data }, headers: h }),
   );
@@ -198,6 +144,7 @@ export async function resetPasswordAction(form: FormData) {
   if (!address.success) to("/auth/forgot-password", { error: "email" });
   if (!code.success) to("/auth/reset-password", { email: address.data, error: "code" });
   if (!secret.success) to("/auth/reset-password", { email: address.data, error: "password" });
+  if (!(await allow("reset", address.data))) to("/auth/reset-password", { email: address.data, error: "rate" });
 
   const result = await call((h) =>
     getAuth().api.resetPasswordEmailOTP({
@@ -217,6 +164,7 @@ export async function signInWithProviderAction(form: FormData) {
   const next = safeNext(form.get("next"));
   const provider = form.get("provider");
   if (!configuredProviders().includes(provider as SocialProvider)) to("/auth/sign-in", { error: "invalid", next });
+  if (!(await allow("provider"))) to("/auth/sign-in", { error: "rate", next });
 
   const result = await call((h) =>
     getAuth().api.signInSocial({
@@ -242,6 +190,10 @@ export async function startEnrollmentAction(form: FormData) {
   const next = safeNext(form.get("next"));
   const result = await call((h) => getAuth().api.mfaStartEnrollment({ headers: h }));
   if (!result.ok) {
+    if (result.code === "MAILBOX_PROOF_REQUIRED") {
+      const session = await getLoginSession();
+      to("/auth/sign-in/code", { email: session?.user.email, notice: "prove", next });
+    }
     if (result.code === "EMAIL_NOT_VERIFIED") to("/auth/access", { next });
     if (result.code === "MFA_ALREADY_ENROLLED") to("/auth/mfa", { next });
     to("/auth/sign-in", { next });
@@ -254,6 +206,8 @@ export async function confirmEnrollmentAction(form: FormData) {
   const next = safeNext(form.get("next"));
   const code = totp.safeParse(form.get("code"));
   if (!code.success) to("/auth/mfa/setup", { error: "code", next });
+  const who = (await getLoginSession())?.user.id;
+  if (!(await allow("mfa", who))) to("/auth/mfa/setup", { error: "rate", next });
   const result = await call((h) =>
     getAuth().api.mfaConfirmEnrollment({ body: { code: code.data }, headers: h }),
   );
@@ -268,6 +222,8 @@ export async function verifyAuthenticatorAction(form: FormData) {
   const next = safeNext(form.get("next"));
   const code = totp.safeParse(form.get("code"));
   if (!code.success) to("/auth/mfa", { error: "code", next });
+  const who = (await getLoginSession())?.user.id;
+  if (!(await allow("mfa", who))) to("/auth/mfa", { error: "rate", next });
   const result = await call((h) => getAuth().api.mfaVerify({ body: { code: code.data }, headers: h }));
   if (!result.ok) {
     if (result.code === "MFA_LOCKED") to("/auth/mfa", { error: "locked", next });
@@ -283,6 +239,8 @@ export async function recoverWithCodeAction(form: FormData) {
   const next = safeNext(form.get("next"));
   const code = recovery.safeParse(form.get("code"));
   if (!code.success) to("/auth/mfa/recover", { error: "code", next });
+  const who = (await getLoginSession())?.user.id;
+  if (!(await allow("mfa", who))) to("/auth/mfa/recover", { error: "rate", next });
   const result = await call((h) => getAuth().api.mfaRecover({ body: { code: code.data }, headers: h }));
   if (!result.ok) {
     to("/auth/mfa/recover", { error: result.code === "MFA_LOCKED" ? "locked" : "code", next });
@@ -315,6 +273,37 @@ export async function resetAuthenticatorAction() {
   const result = await call((h) => getAuth().api.mfaResetAuthenticator({ headers: h }));
   if (!result.ok) to("/auth/account", { error: result.code === "MFA_NOT_FRESH" ? "fresh" : "failed" });
   to("/auth/mfa/setup", { next: "/auth/account" });
+}
+
+/**
+ * Add a password, or change it. A password is only ever set by somebody
+ * already signed in with their authenticator — never at sign-up — so it can
+ * never be planted on an address before its owner proves it. Adding one where
+ * none exists needs the authenticator within ten minutes; changing one needs
+ * the current password, and signs out every other session.
+ */
+export async function setPasswordAction(form: FormData) {
+  await assertLoginOrigin();
+  const session = await getLoginSession();
+  if (!session?.mfaVerifiedAt) to("/auth/sign-in", { next: "/auth/account" });
+  const fresh = Date.now() - session.mfaVerifiedAt.getTime() < 10 * 60 * 1000;
+  const next = password.safeParse(form.get("password"));
+  if (!next.success) to("/auth/account", { error: "password" });
+  if (!(await allow("setPassword", session.user.id))) to("/auth/account", { error: "rate" });
+  const current = z.string().min(1).max(128).safeParse(form.get("current"));
+
+  const result = current.success
+    ? await call((h) =>
+        getAuth().api.changePassword({
+          body: { currentPassword: current.data, newPassword: next.data, revokeOtherSessions: true },
+          headers: h,
+        }),
+      )
+    : fresh
+      ? await call((h) => getAuth().api.setPassword({ body: { newPassword: next.data }, headers: h }))
+      : ({ ok: false, code: "MFA_NOT_FRESH" } as const);
+  if (!result.ok) to("/auth/account", { error: result.code === "MFA_NOT_FRESH" ? "fresh" : "current" });
+  to("/auth/account", { notice: "password" });
 }
 
 /* ------------------------------------------------------------------ */

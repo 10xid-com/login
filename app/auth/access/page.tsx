@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { accountStatus, getLoginSession, nextQuery, safeNext } from "@/lib/auth/login";
-import { checkAccessAction, sendVerificationCodeAction, signOutAction } from "../identity-actions";
+import { checkAccessAction, signOutAction } from "../identity-actions";
 import { AuthCard, SubmitButton } from "../auth-card";
 import { Hidden, SecondaryButton } from "../flow-ui";
 
@@ -23,12 +23,13 @@ export default async function AccessPage({
   const status = await accountStatus(session.user);
 
   if (status === "unverified") {
+    // Not reachable through these pages (every identity is created from a
+    // proven mailbox); shown for an identity a provider did not vouch for.
     return (
-      <AuthCard title="Confirm your email" intro={`We need to confirm ${session.user.email} before going further.`}>
-        <form action={sendVerificationCodeAction}>
-          <Hidden name="next" value={next} />
-          <Hidden name="email" value={session.user.email} />
-          <SubmitButton>Email me a code</SubmitButton>
+      <AuthCard title="Confirm your email"
+        intro={`${session.user.email} has not been confirmed. Sign out, then sign in with an emailed code.`}>
+        <form action={signOutAction}>
+          <SubmitButton>Sign out</SubmitButton>
         </form>
       </AuthCard>
     );

@@ -58,9 +58,7 @@ export const ALLOWED_BEFORE_MFA = new Set([
   "/sign-in/email-otp",
   "/sign-in/social",
   "/callback/:id",
-  "/sign-up/email",
   "/email-otp/send-verification-otp",
-  "/email-otp/verify-email",
   "/email-otp/request-password-reset",
   "/email-otp/reset-password",
   "/mfa/start-enrollment",
@@ -109,8 +107,9 @@ function isLocked(factor: Factor): boolean {
   return factor.lockedUntil !== null && factor.lockedUntil.getTime() > Date.now();
 }
 
-async function recordFailure(factorId: string) {
-  await authDb()
+/** Count a failure, inside the transaction that holds the factor's row lock. */
+async function recordFailure(tx: Tx, factorId: string) {
+  await tx
     .update(authTwoFactors)
     .set({
       failedVerificationCount: sql`${authTwoFactors.failedVerificationCount} + 1`,
@@ -119,6 +118,22 @@ async function recordFailure(factorId: string) {
     })
     .where(eq(authTwoFactors.id, factorId));
 }
+
+type Tx = Parameters<Parameters<ReturnType<typeof authDb>["transaction"]>[0]>[0];
+
+/**
+ * End every other sign-in of this identity: after a recovery code or a new
+ * authenticator, whoever else was signed in may be whoever has the phone.
+ * Their portal sessions end on their next request (auth_session_touch).
+ */
+async function endOtherSessions(tx: Tx, userId: string, keepSessionId: string) {
+  await tx
+    .delete(authSessions)
+    .where(and(eq(authSessions.userId, userId), sql`${authSessions.id} <> ${keepSessionId}`));
+}
+
+/** Only a session that proved the mailbox may set up an authenticator. */
+const MAILBOX_PROOFS = new Set(["email-otp", "social"]);
 
 const locked = () =>
   new APIError("TOO_MANY_REQUESTS", {
@@ -133,6 +148,13 @@ export const mfaGate = () =>
     id: "mfa-gate",
     hooks: {
       before: [
+        {
+          // disabledPaths compares literal paths, so a templated one is refused here.
+          matcher: (ctx) => ctx.path === "/reset-password/:token",
+          handler: createAuthMiddleware(async () => {
+            throw new APIError("NOT_FOUND", { message: "Not found." });
+          }),
+        },
         {
           matcher: (ctx) => !ALLOWED_BEFORE_MFA.has(ctx.path ?? ""),
           handler: createAuthMiddleware(async (ctx) => {
@@ -158,7 +180,14 @@ export const mfaGate = () =>
         "/mfa/start-enrollment",
         { method: "POST", use: [sessionMiddleware] },
         async (ctx) => {
-          const { user } = ctx.context.session;
+          const { user, session } = ctx.context.session;
+          const firstFactor = (session as { firstFactor?: string | null }).firstFactor ?? "";
+          if (!MAILBOX_PROOFS.has(firstFactor)) {
+            throw new APIError("FORBIDDEN", {
+              message: "Confirm it is you with an emailed code first.",
+              code: "MAILBOX_PROOF_REQUIRED",
+            });
+          }
           // Only an identity whose address is proven may hold an authenticator
           // (and 0022 removes one if the address is proven later, by someone).
           if (!user.emailVerified) {
@@ -180,7 +209,12 @@ export const mfaGate = () =>
             if (existing) {
               await tx
                 .update(authTwoFactors)
-                .set({ secret: encrypted, backupCodes: placeholder, lastUsedStep: null })
+                .set({
+                  secret: encrypted,
+                  backupCodes: placeholder,
+                  lastUsedStep: null,
+                  enrollingSessionId: session.id,
+                })
                 .where(eq(authTwoFactors.id, existing.id));
             } else {
               await tx.insert(authTwoFactors).values({
@@ -189,6 +223,7 @@ export const mfaGate = () =>
                 secret: encrypted,
                 backupCodes: placeholder,
                 verified: false,
+                enrollingSessionId: session.id,
               });
             }
             return "ok" as const;
@@ -221,7 +256,8 @@ export const mfaGate = () =>
             const secret = await symmetricDecrypt({ key: secretConfig, data: factor.secret });
             const step = await matchingStep(secret, ctx.body.code);
             if (step === null || (factor.lastUsedStep !== null && step <= factor.lastUsedStep)) {
-              return { failed: factor.id };
+              await recordFailure(tx, factor.id);
+              return "invalid" as const;
             }
             await tx
               .update(authTwoFactors)
@@ -240,10 +276,7 @@ export const mfaGate = () =>
             });
           }
           if (outcome === "locked") throw locked();
-          if (typeof outcome === "object") {
-            await recordFailure(outcome.failed);
-            throw invalid();
-          }
+          if (outcome === "invalid") throw invalid();
           return ctx.json({ status: true });
         },
       ),
@@ -268,7 +301,8 @@ export const mfaGate = () =>
               .from(authTwoFactors)
               .where(and(eq(authTwoFactors.userId, user.id), eq(authTwoFactors.verified, false)))
               .for("update");
-            if (!factor) return "no_pending" as const;
+            // Only the session that started this enrolment may finish it.
+            if (!factor || factor.enrollingSessionId !== session.id) return "no_pending" as const;
             const secret = await symmetricDecrypt({ key: secretConfig, data: factor.secret });
             const step = await matchingStep(secret, ctx.body.code);
             if (step === null) return "invalid" as const;
@@ -276,6 +310,7 @@ export const mfaGate = () =>
               .update(authTwoFactors)
               .set({
                 verified: true,
+                enrollingSessionId: null,
                 lastUsedStep: step,
                 backupCodes: encrypted,
                 failedVerificationCount: 0,
@@ -286,6 +321,7 @@ export const mfaGate = () =>
               .update(authSessions)
               .set({ mfaVerifiedAt: new Date() })
               .where(eq(authSessions.id, session.id));
+            await endOtherSessions(tx, user.id, session.id);
             return "ok" as const;
           });
           if (outcome === "no_pending") {
@@ -322,7 +358,10 @@ export const mfaGate = () =>
             codes.forEach((code, i) => {
               if (constantTimeEqual(code.toLowerCase(), presented)) index = i;
             });
-            if (index < 0) return { failed: factor.id, remaining: undefined };
+            if (index < 0) {
+              await recordFailure(tx, factor.id);
+              return "invalid" as const;
+            }
             const remaining = codes.filter((_, i) => i !== index);
             await tx
               .update(authTwoFactors)
@@ -339,16 +378,14 @@ export const mfaGate = () =>
               .update(authSessions)
               .set({ mfaVerifiedAt: new Date() })
               .where(eq(authSessions.id, session.id));
-            return { failed: undefined, remaining: remaining.length };
+            await endOtherSessions(tx, user.id, session.id);
+            return { remaining: remaining.length };
           });
           if (outcome === "not_enrolled") {
             throw new APIError("BAD_REQUEST", { message: "No authenticator is set up.", code: "MFA_NOT_ENROLLED" });
           }
           if (outcome === "locked") throw locked();
-          if (outcome.failed !== undefined) {
-            await recordFailure(outcome.failed);
-            throw invalid();
-          }
+          if (outcome === "invalid") throw invalid();
           return ctx.json({ status: true, remaining: outcome.remaining });
         },
       ),
@@ -390,6 +427,7 @@ export const mfaGate = () =>
               .update(authSessions)
               .set({ mfaVerifiedAt: null })
               .where(eq(authSessions.id, session.id));
+            await endOtherSessions(tx, user.id, session.id);
           });
           return ctx.json({ status: true });
         },

@@ -126,16 +126,6 @@ export const PAGES: PageRecord[] = [
     group: "Getting in",
   },
   {
-    id: "login.verify-email",
-    path: "/auth/verify-email",
-    name: "Confirm your email",
-    purpose: "Type the emailed code that proves you hold the inbox.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/verify-email/page.tsx",
-    group: "Getting in",
-  },
-  {
     id: "login.forgot-password",
     path: "/auth/forgot-password",
     name: "Forgot password",

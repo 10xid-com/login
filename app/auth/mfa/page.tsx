@@ -8,6 +8,7 @@ import { Hidden, TextLink } from "../flow-ui";
 export const metadata: Metadata = { title: "Authenticator code" };
 
 const ERRORS: Record<string, string> = {
+  rate: "Too many attempts. Wait a few minutes and try again.",
   code: "That code is not right. Use the current code from your authenticator app.",
   locked: "Too many incorrect codes. Try again in 15 minutes, or use a recovery code.",
 };

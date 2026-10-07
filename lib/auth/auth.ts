@@ -64,6 +64,13 @@ export function loginOrigin(): string {
  * profile from the browser, and reading provider tokens.
  */
 const DISABLED_PATHS = [
+  // An identity is only ever created from a proven mailbox (an emailed code,
+  // or Google / Microsoft vouching for it), so none exists unverified: a
+  // password is added after signing in (/auth/account), never at sign-up.
+  // Otherwise whoever signed up first with an invited address would keep the
+  // password they chose once the real owner confirmed it.
+  "/sign-up/email",
+  "/email-otp/verify-email",
   "/request-password-reset",
   "/reset-password",
   "/reset-password/:token",
@@ -120,10 +127,6 @@ function createAuth() {
       maxPasswordLength: 128,
       revokeSessionsOnPasswordReset: true,
     },
-    emailVerification: {
-      sendOnSignUp: true,
-      autoSignInAfterVerification: false,
-    },
 
     socialProviders: {
       ...(google
@@ -178,6 +181,7 @@ function createAuth() {
       freshAge: 10 * 60,
       additionalFields: {
         mfaVerifiedAt: { type: "date", required: false, input: false },
+        firstFactor: { type: "string", required: false, input: false },
         lastActiveAt: { type: "date", required: false, input: false },
       },
     },
@@ -211,6 +215,20 @@ function createAuth() {
     },
 
     databaseHooks: {
+      session: {
+        create: {
+          /** Record how the first step was proven; enrolment needs a mailbox proof. */
+          before: async (session, ctx) => {
+            const path = ctx?.path ?? "";
+            const firstFactor =
+              path === "/sign-in/email" ? "password"
+              : path === "/sign-in/email-otp" ? "email-otp"
+              : path === "/callback/:id" || path === "/sign-in/social" ? "social"
+              : null;
+            return { data: { ...session, firstFactor } };
+          },
+        },
+      },
       user: {
         create: {
           /**
@@ -231,9 +249,6 @@ function createAuth() {
               });
             }
             const path = ctx?.path ?? "";
-            if (path === "/sign-up/email") {
-              return { data: { ...user, email, emailVerified: false } };
-            }
             if (path === "/sign-in/email-otp") {
               // The emailed code proved the mailbox.
               return { data: { ...user, email, emailVerified: true } };
@@ -260,14 +275,17 @@ function createAuth() {
         expiresIn: CODE_MINUTES * 60,
         allowedAttempts: 5,
         storeOTP: "hashed",
-        overrideDefaultEmailVerification: true,
-        sendVerificationOnSignUp: true,
         async sendVerificationOTP({ email, otp, type }) {
-          if (type !== "sign-in" && type !== "email-verification" && type !== "forget-password") return;
+          if (type !== "sign-in" && type !== "forget-password") return;
           // Codes go only to addresses that may sign in at all; anybody else's
-          // request is answered identically and sends nothing.
+          // request is answered identically and sends nothing. The mail is
+          // sent without being waited for, so the answer's timing does not
+          // say which it was either.
           if (!(await mayReceiveCodes(email))) return;
-          await sendAuthCode({ to: email, code: otp, purpose: type, expiresInMinutes: CODE_MINUTES });
+          void sendAuthCode({ to: email, code: otp, purpose: type, expiresInMinutes: CODE_MINUTES }).catch(
+            (error: unknown) =>
+              console.error("[auth] a code could not be sent:", error instanceof Error ? error.message : "unknown"),
+          );
         },
       }),
       mfaGate(),

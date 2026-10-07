@@ -8,6 +8,7 @@ import { Hidden, TextLink } from "../../flow-ui";
 export const metadata: Metadata = { title: "Use a recovery code" };
 
 const ERRORS: Record<string, string> = {
+  rate: "Too many attempts. Wait a few minutes and try again.",
   code: "That recovery code is not right, or has been used.",
   locked: "Too many incorrect codes. Try again in 15 minutes.",
 };

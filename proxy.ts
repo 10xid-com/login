@@ -43,7 +43,6 @@ const SIGN_IN_PAGES = new Set([
   "/auth/sign-in",
   "/auth/sign-in/code",
   "/auth/sign-up",
-  "/auth/verify-email",
   "/auth/forgot-password",
   "/auth/reset-password",
 ]);

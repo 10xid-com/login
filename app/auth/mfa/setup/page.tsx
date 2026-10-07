@@ -56,7 +56,11 @@ export default async function MfaSetupPage({
           maxLength={6} required className={inputClass} />
         {params.error ? (
           <FieldError>
-            {params.error === "code" ? "That code is not right. Use the current code from your app." : "That did not work. Start again."}
+            {params.error === "code"
+              ? "That code is not right. Use the current code from your app."
+              : params.error === "rate"
+                ? "Too many attempts. Wait a few minutes and try again."
+                : "That did not work. Start again."}
           </FieldError>
         ) : null}
         <SubmitButton>Confirm</SubmitButton>

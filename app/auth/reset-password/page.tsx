@@ -6,6 +6,7 @@ import { Notice } from "../flow-ui";
 export const metadata: Metadata = { title: "Choose a new password" };
 
 const ERRORS: Record<string, string> = {
+  rate: "Too many attempts. Wait a few minutes and try again.",
   code: "That code is not right, or it has expired.",
   password: "Choose a password of at least 12 characters.",
 };

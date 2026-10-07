@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Reset your password" };
 
 const ERRORS: Record<string, string> = {
   email: "That does not look like an email address.",
-  rate: "Too many requests. Wait a minute and try again.",
+  rate: "Too many requests. Wait a few minutes and try again.",
 };
 
 export default async function ForgotPasswordPage({
