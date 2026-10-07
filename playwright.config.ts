@@ -18,7 +18,15 @@ import { defineConfig, devices } from "@playwright/test";
  *    anyway. No Safari result is reported or implied.
  */
 
+/**
+ * Two servers, as in production: this app is sign-in, on the login host, and
+ * 10xid-com/app is the portal, which every sign-in ends on. The portal is
+ * started from E2E_APP_DIR (a checkout of 10xid-com/app, dependencies
+ * installed, sharing this database), or reused if one is already listening.
+ */
 const PRIMARY = process.env.E2E_PRIMARY_HOST ?? "login.portal-a.test:3000";
+const APP = process.env.E2E_APP_HOST ?? "app.portal-a.test:3001";
+const APP_DIR = process.env.E2E_APP_DIR ?? "../app";
 
 /**
  * This environment ships a Chromium build from an older Playwright revision.
@@ -74,12 +82,21 @@ export default defineConfig({
    * transport, not a weakened guard. The production build is verified
    * separately by `npm run build`.
    */
-  webServer: {
-    command: "npm run dev",
-    url: `http://${PRIMARY}/auth/login`,
-    reuseExistingServer: true,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      command: "npm run dev",
+      url: `http://${PRIMARY}/auth/login`,
+      reuseExistingServer: true,
+      timeout: 120_000,
+      env: { PORTAL_HOST: APP },
+    },
+    {
+      command: `npm run dev --prefix ${APP_DIR} -- -p ${APP.split(":")[1] ?? "3001"}`,
+      url: `http://${APP}/auth/sso/failed`,
+      reuseExistingServer: true,
+      timeout: 120_000,
+    },
+  ],
 
   use: {
     baseURL: `http://${PRIMARY}`,

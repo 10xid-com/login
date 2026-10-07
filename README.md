@@ -1,53 +1,44 @@
-# 10XiD Portal
+# 10XiD Login
 
-One sign-in across several domains, and a job exchange between Branding Centres and its
-clients — replacing the email thread that carries that work today.
+Sign-in for 10XiD, at **`login.10xid.com`**, and the owner of the database schema and its
+migrations. The portal itself — dashboard, jobs, the staff workspace, team and account
+screens — is [`10xid-com/app`](https://github.com/10xid-com/app), at **`app.10xid.com`** and on
+the client domains.
 
-**Status: deployed.** Two Railway services build from `main`, each with a custom domain and
-a Railway address:
+This app shows only `/auth/*`: sign-in, accepting an invitation, the emailed code, the
+staff authenticator and recovery codes, and `/auth/sso/authorize`, where the cross-domain
+handoff mints its ticket. Any other address is sent to the portal (`PORTAL_HOST`), and
+signing in ends there. A portal host or client domain with no session sends the browser
+here and gets it back signed in, with no second prompt.
 
-| Service | Custom domain | Railway address | Port |
-|---|---|---|---|
-| `portal` — the login host | `login.10xid.com` | `portal-production-56c9.up.railway.app` | 8080 |
-| `portal-northstar` — a client domain | `northstar.10xconnections.com` | `portal-northstar-production.up.railway.app` | 3000 |
+Both apps use **one database**. Its schema (`lib/db/schema.ts`) and migrations
+(`drizzle/`) live here; `10xid-com/app` carries an identical copy of the schema file,
+which its CI compares against this repository's `main`. A schema change is made here,
+with its migration, and then copied there unchanged.
 
-The two custom domains are genuinely different registrable domains, which is what makes
-the cross-domain handoff a real test. Both carry a valid certificate. A custom domain on
-Railway needs two records in Cloudflare, not one: the CNAME that routes traffic, and a
-`_railway-verify.<name>` TXT record proving ownership. With only the CNAME, the
-certificate sits at "issuing" indefinitely and browsers refuse the address.
+| Service | Repository | Custom domain |
+|---|---|---|
+| `portal` — the login host | `10xid-com/login` | `login.10xid.com` |
+| the portal | `10xid-com/app` | `app.10xid.com` |
+| a client domain | `10xid-com/app` | `northstar.10xconnections.com` |
 
-### Moving the portal to `app.10xid.com`
+A custom domain on Railway needs two records in Cloudflare, not one: the CNAME that
+routes traffic, and a `_railway-verify.<name>` TXT record proving ownership. With only
+the CNAME, the certificate sits at "issuing" indefinitely and browsers refuse the address.
 
-The portal pages (dashboard, chat, jobs, team, staff…) can live on a host of their own,
-leaving `login.10xid.com` with nothing but sign-in. `PORTAL_HOST` switches this on; unset,
-nothing changes, so the code can be deployed before any of the steps below.
+The portal host is a handoff destination like a client domain, so it needs a row in
+`organization_domains` under the house company. The deploy step (`scripts/migrate.mjs`,
+Railway's pre-deploy command) registers `PORTAL_HOST` there whenever it is set. To do it by
+hand instead, as the owner connection:
 
-`app.10xid.com` is a sibling of `login.10xid.com`, but the session cookie is `__Host-`
+```sql
+insert into organization_domains (organization_id, hostname, is_primary, verified_at)
+select id, 'app.10xid.com', false, now() from organizations where type = 'internal';
+```
+
+`app.10xid.com` and `login.10xid.com` are siblings, but the session cookie is `__Host-`
 prefixed and so is never shared between them. That is deliberate — a cookie scoped to
-`.10xid.com` could be read or overwritten by any other subdomain. The portal host gets its
-own session through the same handoff a client domain uses, with no second prompt.
-
-1. **Domain.** Add `app.10xid.com` as a second custom domain on the `portal` service (or on
-   a new service built from `main`, with the same environment). In Cloudflare: the CNAME,
-   and the `_railway-verify.app` TXT record.
-2. **Register it** as a handoff destination, under the house company. This happens by
-   itself: the deploy step (`scripts/migrate.mjs`) registers `PORTAL_HOST` whenever it is
-   set, so step 4 does it. To register it by hand instead, as the owner connection:
-
-   ```sql
-   select id, name from organizations where type = 'internal';   -- expect one row
-   insert into organization_domains (organization_id, hostname, is_primary, verified_at)
-   select id, 'app.10xid.com', false, now() from organizations where type = 'internal';
-   ```
-3. **Check** that `https://app.10xid.com/` answers with a valid certificate. (It can only
-   complete a sign-in once step 4 has registered it.)
-4. **Switch.** Set `PORTAL_HOST=app.10xid.com` on the service answering
-   `login.10xid.com`, and redeploy. From then on every portal page asked for there is sent to
-   `app.10xid.com`, the sign-in screens on any other host are sent to the login host, and
-   staff finish their authenticator step on the login host before being handed over.
-
-Undoing it is unsetting `PORTAL_HOST`. The redirects are 307s, which browsers do not cache.
+`.10xid.com` could be read or overwritten by any other subdomain.
 
 ## What it does
 
@@ -60,12 +51,9 @@ Undoing it is unsetting `PORTAL_HOST`. The redirects are 307s, which browsers do
 - **Accounts are by invitation**, never by open registration — a portal holds several
   companies' data, and an address typed into a form says nothing about which company its
   owner belongs to.
-- **A client sees only their own company's jobs.** Staff see every client, and act on one
-  at a time through a time-boxed grant carrying a typed reason.
-- **Requests arrive as cards** on the dashboard, carrying what the sender actually wrote,
-  and each can be given a Google Drive folder with the request filed into it.
-- **A client's own systems can file work** with their own API key — write-only, bound to
-  one company, revocable without touching anybody's login.
+
+Everything else — requests, jobs, the workspace, API keys — is the portal's, and is
+described in `10xid-com/app`.
 
 ## The rule everything else serves
 
@@ -88,7 +76,8 @@ either a policy or a written exemption. It has caught two tables so far.
 
 ## Running it locally
 
-Needs Node 22+ and PostgreSQL 16.
+Needs Node 22+, PostgreSQL 16, and a checkout of `10xid-com/app` next to this one
+(`../app`): signing in ends on the portal.
 
 ```bash
 npm install
@@ -96,7 +85,8 @@ cp .env.example .env.local        # then fill in the two connection strings
 
 npm run db:migrate                # runs as the OWNER
 npm run db:seed                   # two client companies, one internal, three people
-npm run dev
+PORTAL_HOST=app.portal-a.test:3001 npm run dev    # this app, on :3000
+(cd ../app && npm run dev -- -p 3001)              # the portal, on :3001
 ```
 
 Two connection strings, and they must differ: `DATABASE_URL` owns the tables and runs
@@ -107,103 +97,31 @@ Sign-in codes are not emailed in development — they are appended to
 **refuses** to fall back to that, rather than writing codes to disk where they might be
 read.
 
-### The two domains
-
-Cross-domain sign-in cannot be demonstrated between two subdomains of one domain; that is
-ordinary cookie behaviour. Local development uses two separate registrable domains:
+### The domains
 
 ```
-127.0.0.1  login.portal-a.test      # the only place sign-in happens
-127.0.0.1  app.portal-a.test        # the portal pages, when PORTAL_HOST is set
-127.0.0.1  rotary.portal-b.test     # a client domain
-127.0.0.1  northstar.portal-b.test  # a second client, so isolation has a target
+127.0.0.1  login.portal-a.test      # this app, :3000 — the only place sign-in happens
+127.0.0.1  app.portal-a.test        # the portal (10xid-com/app), :3001
+127.0.0.1  rotary.portal-b.test     # a client domain, served by the portal, :3001
+127.0.0.1  northstar.portal-b.test  # a second client, so isolation has a target, :3001
 ```
 
-## Optional integrations
+portal-a.test and portal-b.test are different registrable domains, so cross-domain
+sign-in is tested for real. `app` and `login` are siblings under one domain, as in
+production, and still share no cookie: it is `__Host-` prefixed.
 
-Each is **inert without configuration** rather than half-working. See `.env.example`.
+## Email
 
-| | What it needs |
-|---|---|
-| Email (Resend) | `RESEND_API_KEY`. Without it, development writes codes to a file and production refuses to start the flow. |
-| Google Drive | A service account with the `drive.file` scope, and one folder shared with it. The scope reaches only files the portal itself created. |
-| Optional alternate workspace engines (Claude, OpenAI) | `ANTHROPIC_API_KEY` for the Claude modes; `OPENAI_API_KEY` plus `OPENAI_MODEL_MULTIMODAL` / `OPENAI_MODEL_REVIEW` for the OpenAI modes. They remain in the repository but are not the stated Chat Boss provider intent. See "The workspace" below. |
-| Ollama (prototype) | `ENABLE_PROTOTYPE_ENGINE=true` and `OLLAMA_API_KEY` for Ollama Cloud. One picker entry per model in `OLLAMA_MODELS`, plus Auto. Text only, no tools, house workspace only — unless `OLLAMA_CLOUD_CLIENT_DATA=true`, which gives it the job and repository tools and client workspaces. |
-| Ollama (self-hosted) | `OLLAMA_SELF_HOSTED=true`, `OLLAMA_BASE_URL` naming your own server, and `OLLAMA_MODELS`. Context and tools like Claude; replaces the prototype. |
-
-## The workspace
-
-> **Provider intent:** Chat Boss is intended to use **Ollama**. No Ollama model or base URL is
-> prescribed here; those are deployment choices. The repository currently also contains Anthropic
-> and OpenAI engine modes. Whether those alternatives should remain available inside `/chat` is a
-> separate architecture decision, so this clarification does not remove or rewrite them.
-
-`/chat` is where staff land: one client's workspace, with conversations kept per client **and per
-person** — two staff on the same client do not read each other's conversations. Postgres enforces
-both (0018: `app.org_id` and `app.user_id`), and child rows reference their parent by
-(id, client, owner) so nothing can be attached to someone else's conversation.
-
-- **The client** is the session's live staff grant, opened from the workspace with a reason exactly
-  as on the Clients page. With no grant, the workspace belongs to the house and holds no client data.
-- **Ask** answers from the client's records and cites them as `[JOB ROT-0042]`; **Plan** writes a
-  step-by-step plan. Neither changes anything. **Build** is shown, disabled, and refused by a database
-  constraint until approval, audit and rollback exist.
-- **Engines** are modes (`Claude — Coding`, `Claude — Deep analysis`, `OpenAI — Multimodal`,
-  `OpenAI — Review`) mapped to model names in the environment, so an upgrade is a variable change.
-  One run goes to one provider; a client can be kept off a mode with an `engine_mode_policies` row.
-- **Receipts.** Every record the model was given, every tool it ran and every warning is a row,
-  written as it happens, and shown in the right-hand panel — "what did the model see?" is answered
-  from the database, not from the answer's text.
-- `/review`, `/explain`, `/plan` and `/test` are recorded choices with fixed, visible wording
-  (`lib/workspace/commands.ts`), never hidden prompts.
-
-- **Repositories** are read through a GitHub App (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`), never a
-  person's token. A repository is linked to **one client at a time** (0019); a conversation picks one
-  linked repository and a branch. Each answer resolves the branch to one commit and reads only that
-  commit, through eight read-only tools — `list_repositories`, `list_branches`,
-  `list_repository_tree`, `read_repository_file`, `search_repository`, `get_commit_history`,
-  `get_changed_files`, `create_patch_preview` — bound on the server to the conversation's repository:
-  the model names paths, never a repository. `lib/repo/policy.ts` refuses traversal, secrets
-  (`.env`, keys, credential files), `.git/`, binaries, symbolic links and submodules, and caps every
-  read, listing and search. Each file read is a receipt naming `path`, lines and commit. A patch
-  preview is a diff to read and copy; nothing is ever written to a repository.
-- **`@path`** and **`@folder:path`** in a message add that file or folder to the conversation's
-  context; context files send their first 120 lines, and the model reads further with its tools.
-
-Attachments (private Backblaze B2 storage) come next.
-
-The browser tests for grounded answers run against a local stand-in for the Anthropic API:
-
-```bash
-ANTHROPIC_API_KEY=test ANTHROPIC_BASE_URL=http://127.0.0.1:4010 \
-GITHUB_APP_ID=1 GITHUB_APP_PRIVATE_KEY="$(openssl genrsa 2048 2>/dev/null)" GITHUB_API_URL=http://127.0.0.1:4011 \
-npm run test:e2e
-```
-
-The GitHub stand-in (`test/e2e/mock-github.ts`) does not check signatures, so any throwaway RSA key will do.
+`RESEND_API_KEY`. Without it, development writes codes to a file and production refuses
+to start the flow.
 
 ## Proving it
 
 ```bash
 npm test          # unit and database tests, as the restricted role, against real Postgres
-npm run test:e2e  # browser tests across Chrome and Firefox, normal and fresh profiles
-npm run prove     # signs in as a real client and guesses another client's job address
+npm run test:e2e  # browser tests across Chrome and Firefox, normal and fresh profiles;
+                  # starts this app on :3000 and the portal (E2E_APP_DIR, default ../app) on :3001
 ```
-
-`npm run prove` prints a transcript rather than an assertion:
-
-```
-── the attempt: another client's job, by its exact real id ───────
-  HTTP 404 Not Found
-  contains their job title:   false
-  bytes of their data leaked: 0
-
-  Same status for a real job and an imaginary one: yes
-```
-
-That last line matters. An endpoint that answered differently for a real job than an
-imaginary one would confirm which ids exist, and could be walked to enumerate a
-competitor's workload.
 
 ## Measured, not assumed
 
@@ -220,9 +138,9 @@ engine available is not the same thing where it matters.
 
 ## Conventions worth knowing
 
-- **Next.js 16 renamed middleware to `proxy.ts`.** It does one cheap thing: send a
-  cookie-less request on a client domain into the handoff. It deliberately does not
-  validate sessions — that belongs in the data layer.
+- **Next.js 16 renamed middleware to `proxy.ts`.** Here it keeps `/auth/*` and sends
+  every other path to the portal (`PORTAL_HOST`), asking a visitor with no session to sign
+  in first. It deliberately does not validate sessions — that belongs in the data layer.
 - **Versions are pinned exactly.** Drizzle's documentation site describes 1.0 while npm
   installs 0.45.2 with a different migration layout, so a caret produces a build that
   does not match its own documentation.

@@ -596,19 +596,9 @@ describe("no permanent takeover: the guard is on every route that could be one",
    * directories are walked instead, and anything new inside them has to carry
    * the guard or fail here.
    */
-  const ROOTS = [
-    "app/account",
-    "app/auth/2fa",
-    "app/auth/recovery-codes",
-  ];
-
-  /** Named individually: these are not account security, but they file audit
-   * rows with a single identity column, so they refuse too. */
-  const SINGLE_IDENTITY_AUDIT = [
-    "app/staff/actions.ts",
-    "app/team/actions.ts",
-    "app/staff/keys/actions.ts",
-  ];
+  // The account screens, and the routes that file single-identity audit rows,
+  // are the portal's and are walked by 10xid-com/app's copy of this test.
+  const ROOTS = ["app/auth/2fa", "app/auth/recovery-codes"];
 
   function walk(dir: string): string[] {
     return readdirSync(dir).flatMap((entry) => {
@@ -631,23 +621,10 @@ describe("no permanent takeover: the guard is on every route that could be one",
     expect(files.filter((f) => !guarded(f))).toEqual([]);
   });
 
-  test("the single-identity audit routes refuse it too", () => {
-    expect(SINGLE_IDENTITY_AUDIT.filter((f) => !guarded(f))).toEqual([]);
-  });
-
   test("the guard itself is one function, not a copied condition", () => {
     const src = readFileSync("lib/auth/require.ts", "utf8");
     expect(src).toContain("export function refuseWhileActingAs");
     expect(src).toContain('redirect("/act-as?error=blocked")');
-  });
-
-  test("signing out ends the REAL person's sessions, never the target's", () => {
-    // Acting as Joel, `ctx.userId` IS Joel. The unchanged line would have
-    // signed him out of every device he owns because somebody else pressed a
-    // button in a window wearing his name.
-    const src = readFileSync("app/auth/actions.ts", "utf8");
-    expect(src).toContain("signOutEverywhere(ctx.realUserId");
-    expect(src).not.toContain("signOutEverywhere(ctx.userId");
   });
 
   test("the handoff hands over the REAL person, never the one being worn", () => {
@@ -657,20 +634,5 @@ describe("no permanent takeover: the guard is on every route that could be one",
     const src = readFileSync("app/auth/sso/authorize/route.ts", "utf8");
     expect(src).toContain("userId: ctx.realUserId");
     expect(src).not.toContain("userId: ctx.userId");
-  });
-
-  test("the act-as action decides from the REAL identity, never the worn one", () => {
-    const src = readFileSync("app/act-as/actions.ts", "utf8");
-    expect(src).toContain("realUserId: ctx.realUserId");
-    expect(src).toContain("realIsStaff: ctx.realIsStaff");
-    expect(src).not.toContain("realUserId: ctx.userId");
-    expect(src).not.toContain("realIsStaff: ctx.scope.isStaff");
-  });
-
-  test("the banner is resolved by the shell, so no page can omit it", () => {
-    const src = readFileSync("app/portal-shell.tsx", "utf8");
-    expect(src).toContain("await getSessionContext()");
-    expect(src).toContain("You are acting as");
-    expect(src).toContain("stopActingAsAction");
   });
 });

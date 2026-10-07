@@ -6,13 +6,11 @@ import { z } from "zod";
 import { requestSignInCode, verifySignInCode } from "@/lib/auth/codes";
 import {
   currentHost,
-  getSessionContext,
-  signOutEverywhere,
   startSession,
   writeSessionCookie,
 } from "@/lib/auth/session";
 import { SESSION_POLICY } from "@/lib/auth/policy";
-import { afterSignIn, signInUrl } from "@/lib/auth/sso";
+import { afterSignIn } from "@/lib/auth/sso";
 
 /**
  * A "where were you going" value is always a PATH on this host, never a URL.
@@ -121,21 +119,4 @@ export async function verifyCodeAction(formData: FormData) {
   );
 
   redirect(afterSignIn(next));
-}
-
-export async function signOutAction() {
-  const ctx = await getSessionContext();
-  if (ctx) {
-    /**
-     * realUserId, not userId.
-     *
-     * Signing out ends every session the person at the keyboard holds. While
-     * acting as somebody else, `userId` is THEIR account — so the unchanged
-     * line would have signed the target out of every device they own, on every
-     * domain, because somebody else pressed a button in a window wearing their
-     * name. The act-as grant lives on this session and dies with it either way.
-     */
-    await signOutEverywhere(ctx.realUserId, ctx.sessionId);
-  }
-  redirect(signInUrl());
 }

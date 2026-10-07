@@ -1,6 +1,10 @@
 /**
  * Every page this service has, and the iD each one answers to.
  *
+ * The portal's pages are 10xid-com/app's and are listed in its copy of this
+ * file, which is also where the desk that renders this list lives. Their iDs
+ * are theirs: never reuse them here.
+ *
  * The reason this file exists rather than a list typed into a screen: a path is
  * where something lives today, and an iD is what it IS. `/dashboard` may well
  * become `/desk` — it is called a desk in conversation already — and when it
@@ -74,11 +78,13 @@ export const PAGES: PageRecord[] = [
   /* Getting in                                                      */
   /* -------------------------------------------------------------- */
   {
-    id: "front-door",
+    // Not "front-door": that iD is the portal's "/", which decides where you
+    // belong, and it stays with the portal in 10xid-com/app.
+    id: "login-front-door",
     path: "/",
-    name: "Front door",
+    name: "Login front door",
     purpose:
-      "Decides where you belong and sends you there. Staff to the chat, everybody else to the desk, signed out to sign-in. There is no public landing page.",
+      "Sends you on to the portal. The login host has nothing else to show, and no public landing page.",
     audience: "public",
     kind: "machinery",
     file: "app/page.tsx",
@@ -140,141 +146,18 @@ export const PAGES: PageRecord[] = [
   /* -------------------------------------------------------------- */
   /* The work                                                        */
   /* -------------------------------------------------------------- */
-  {
-    id: "dashboard",
-    path: "/dashboard",
-    name: "Dashboard",
-    purpose:
-      "The operations overview: what needs attention, the figures, the status breakdown, recent activity.",
-    audience: "member",
-    kind: "page",
-    file: "app/dashboard/page.tsx",
-    group: "The work",
-  },
-  {
-    id: "jobs",
-    path: "/jobs",
-    name: "Jobs",
-    purpose: "Every job you can see, which after the visibility work is not the same as every job.",
-    audience: "member",
-    kind: "page",
-    file: "app/jobs/page.tsx",
-    group: "The work",
-  },
-  {
-    id: "job",
-    path: "/jobs/[id]",
-    name: "One job",
-    purpose:
-      "A single job. The URL carries the UUID, never the ROT-0042 reference — a guessable reference in a URL is a way to walk somebody else's work.",
-    audience: "member",
-    kind: "page",
-    file: "app/jobs/[id]/page.tsx",
-    group: "The work",
-  },
-  {
-    id: "team",
-    path: "/team",
-    name: "Team",
-    purpose:
-      "Who is in this organization. The page that changes most under the visibility work: it should list who you can SEE, not who is employed.",
-    audience: "member",
-    kind: "page",
-    file: "app/team/page.tsx",
-    group: "The work",
-  },
-  {
-    id: "pages",
-    path: "/pages",
-    name: "Pages",
-    purpose: "This desk. Every page in the service and the iD each one answers to.",
-    audience: "member",
-    kind: "page",
-    file: "app/pages/page.tsx",
-    group: "The work",
-  },
 
   /* -------------------------------------------------------------- */
   /* Your account                                                    */
   /* -------------------------------------------------------------- */
-  {
-    id: "account",
-    path: "/account/sessions",
-    name: "Your details and devices",
-    purpose: "Where you are signed in, and how to sign a device out. Reached from the Pin.",
-    audience: "member",
-    kind: "page",
-    file: "app/account/sessions/page.tsx",
-    group: "Your account",
-  },
 
   /* -------------------------------------------------------------- */
   /* Staff                                                           */
   /* -------------------------------------------------------------- */
-  {
-    id: "clients",
-    path: "/staff",
-    name: "Clients",
-    purpose:
-      "The client picker. Choosing one writes a 30-minute grant with the reason you typed, and raises the acting-on banner.",
-    audience: "staff",
-    kind: "page",
-    file: "app/staff/page.tsx",
-    group: "Staff",
-  },
-  {
-    id: "act-as",
-    path: "/act-as",
-    name: "Act as",
-    purpose:
-      "Be somebody else for an hour, to see Flow from their side. Reason required, named across every screen, and never able to change their address, enrol an authenticator or read their recovery codes.",
-    // Not "staff", and the difference is load-bearing. While acting as a
-    // client the session's effective role IS client, and this page is the way
-    // back — hiding it from the audience it is currently wearing would leave
-    // the exit reachable only from a banner. The page itself refuses anybody
-    // whose REAL session is not staff.
-    audience: "member",
-    kind: "page",
-    file: "app/act-as/page.tsx",
-    group: "Staff",
-  },
-  {
-    id: "chat",
-    path: "/chat",
-    name: "Workspace",
-    purpose:
-      "One client's workspace: conversations with Claude or OpenAI in Ask or Plan mode, grounded in that client's records, with a receipt for what every answer saw. Where staff land after signing in.",
-    audience: "staff",
-    kind: "page",
-    file: "app/chat/page.tsx",
-    group: "Staff",
-  },
-  {
-    id: "keys",
-    path: "/staff/keys",
-    name: "Keys",
-    purpose: "API keys. They file work in and can read nothing back out.",
-    audience: "staff",
-    kind: "page",
-    file: "app/staff/keys/page.tsx",
-    group: "Staff",
-  },
 
   /* -------------------------------------------------------------- */
   /* Machinery                                                       */
   /* -------------------------------------------------------------- */
-  {
-    id: "sso.start",
-    path: "/auth/sso/start",
-    name: "Handoff — start",
-    purpose:
-      "A client domain asks the login host whether this visitor is already signed in. Step one of three.",
-    audience: "public",
-    kind: "machinery",
-    file: "app/auth/sso/start/route.ts",
-    methods: ["GET"],
-    group: "Machinery",
-  },
   {
     id: "sso.authorize",
     path: "/auth/sso/authorize",
@@ -284,76 +167,6 @@ export const PAGES: PageRecord[] = [
     audience: "public",
     kind: "machinery",
     file: "app/auth/sso/authorize/route.ts",
-    methods: ["GET"],
-    group: "Machinery",
-  },
-  {
-    id: "sso.callback",
-    path: "/auth/sso/callback",
-    name: "Handoff — callback",
-    purpose: "The client domain spends the ticket. Spending it destroys it.",
-    audience: "public",
-    kind: "machinery",
-    file: "app/auth/sso/callback/route.ts",
-    methods: ["GET"],
-    group: "Machinery",
-  },
-  {
-    id: "sso.failed",
-    path: "/auth/sso/failed",
-    name: "Handoff failed",
-    purpose:
-      "The only part of the handoff a person is ever meant to look at, and only when something went wrong.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/sso/failed/page.tsx",
-    group: "Machinery",
-  },
-  {
-    id: "api.jobs",
-    path: "/api/v1/jobs",
-    name: "File a job",
-    purpose:
-      "POST only, for machines holding an API key. A GET is answered with an explicit 405: there is no read access behind a key, by design.",
-    audience: "public",
-    kind: "machinery",
-    file: "app/api/v1/jobs/route.ts",
-    methods: ["POST"],
-    group: "Machinery",
-  },
-  {
-    id: "api.workspace.messages",
-    path: "/api/workspace/conversations/[id]/messages",
-    name: "Workspace answers",
-    purpose:
-      "Sends a message in a workspace conversation and streams the answer, its tool activity and its receipts back. Staff only; the conversation must belong to this client and this person.",
-    audience: "staff",
-    kind: "machinery",
-    file: "app/api/workspace/conversations/[id]/messages/route.ts",
-    methods: ["POST"],
-    group: "Machinery",
-  },
-  {
-    id: "api.workspace.repository",
-    path: "/api/workspace/conversations/[id]/repository",
-    name: "Workspace file browser",
-    purpose:
-      "Read-only views of a conversation's repository at its branch: branches, one folder at a time, file-name and text search, and files changed from the default branch. Staff only; the repository comes from the conversation, never the request.",
-    audience: "staff",
-    kind: "machinery",
-    file: "app/api/workspace/conversations/[id]/repository/route.ts",
-    methods: ["GET"],
-    group: "Machinery",
-  },
-  {
-    id: "api.workspace.repositories",
-    path: "/api/workspace/repositories",
-    name: "Repositories to link",
-    purpose:
-      "The repositories the GitHub App is installed on, by name only, for staff linking one to the client in scope.",
-    audience: "staff",
-    kind: "machinery",
-    file: "app/api/workspace/repositories/route.ts",
     methods: ["GET"],
     group: "Machinery",
   },

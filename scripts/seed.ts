@@ -18,12 +18,12 @@ const HOSTS = {
   // Two genuinely different registrable domains. A subdomain pair would prove
   // nothing: sharing a session between two hosts under one domain is ordinary
   // cookie behaviour, not cross-domain sign-in.
-  rotary: process.env.SEED_HOST_ROTARY ?? "rotary.portal-b.test:3000",
-  northstar: process.env.SEED_HOST_NORTHSTAR ?? "northstar.portal-b.test:3000",
-  // Where the portal pages live when PORTAL_HOST is set: a sibling of the login
-  // host, as app.10xid.com is of login.10xid.com. Registered either way, so
-  // switching PORTAL_HOST on locally needs no re-seed.
-  portal: process.env.SEED_HOST_PORTAL ?? "app.portal-a.test:3000",
+  rotary: process.env.SEED_HOST_ROTARY ?? "rotary.portal-b.test:3001",
+  northstar: process.env.SEED_HOST_NORTHSTAR ?? "northstar.portal-b.test:3001",
+  // The portal (10xid-com/app): a sibling of the login host, as app.10xid.com
+  // is of login.10xid.com. It and the client domains above are served by the
+  // portal app, on its own port.
+  portal: process.env.SEED_HOST_PORTAL ?? "app.portal-a.test:3001",
 };
 
 const PEOPLE = {
