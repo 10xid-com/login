@@ -136,7 +136,7 @@ Nothing here has been deployed. In order:
 5. **Deploy app.** Every existing portal session is refused; people are sent to the new
    sign-in once. Check `https://app.10xid.com/healthz` → 200, sign in end to end, sign out.
 6. Set the login service's healthcheck path to `/healthz`.
-7. Remove the four `WORKOS_*` variables from `app` (startup lists them while present).
+7. Remove the four `WORKOS_*` variables from `app` (startup lists them while present), and `TOTP_ENC_KEY` from `portal`.
 
 ## Rollback
 
@@ -150,14 +150,10 @@ Nothing here has been deployed. In order:
 - Roll back **app before login** if both are needed, so the portal never points at a login
   host that cannot mint its tickets.
 
-## Still on the old flow (decision needed)
+## The old sign-in
 
-The previous emailed-code sign-in (`app/auth/login`, `signup`, `verify`, `2fa`,
-`recovery-codes`, `app/auth/actions.ts`, `lib/auth/{codes,totp,recovery,session,act-as,require}.ts`)
-and its tests are still in this repository, unchanged and still reachable at their old paths.
-They no longer lead anywhere — the handoff now requires a Better Auth sign-in and the new
-portal refuses their sessions — but they should be removed in a follow-up once you agree.
-`test/act-as.test.ts` pins the old handoff's source text (`userId: ctx.realUserId`) and fails
-against the new `/auth/sso/authorize`; the equivalent rule now is that the ticket's user is
-the account bound to the Better Auth identity (`userByAuthUserId(session.user.id)`), and no
-act-as state exists on the login host.
+The previous emailed-code sign-in (`/auth/login`, `/auth/signup`, `/auth/verify`, `/auth/2fa`,
+`/auth/recovery-codes`) and its code and tests are removed. Its tables (`sign_in_codes`,
+`users.totp_secret`, `recovery_codes`) stay, untouched, because migrations here are additive;
+old links to those paths now find nothing, and the handoff sends everybody to `/auth/sign-in`.
+`TOTP_ENC_KEY` is no longer read and can be removed from the login service after the cutover.

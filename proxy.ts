@@ -33,15 +33,13 @@ const SESSION_COOKIES = [
  * The screens where somebody proves who they are. Sign-in happens on the login
  * host and nowhere else; another host showing its own form would be a second
  * place to authenticate. A visit to one elsewhere — signing out of the portal
- * lands on /auth/login, for instance — is sent to the login host's copy.
+ * lands on /auth/sign-in, for instance — is sent to the login host's copy.
  *
- * The second-factor and recovery-code screens are not in this list: they act on
- * the session of the host they are on, so they have to stay where they are.
+ * The authenticator and account screens (/auth/mfa*, /auth/account,
+ * /auth/access) are not in this list: they act on the login host's own
+ * session, which no other host has, so elsewhere they simply find none.
  */
 const SIGN_IN_PAGES = new Set([
-  "/auth/login",
-  "/auth/signup",
-  "/auth/verify",
   "/auth/sign-in",
   "/auth/sign-in/code",
   "/auth/sign-up",

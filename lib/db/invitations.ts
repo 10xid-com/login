@@ -164,7 +164,7 @@ export async function acceptInvitation(input: {
      * resolves to cannot be written from two different ideas of what staff is.
      *
      * It used to follow from the company alone: `org?.type === "internal"`.
-     * That is the defect in lib/auth/session.ts seen from the other end, and
+     * That was the defect in the old session code seen from the other end, and
      * it minted the same wrong answer at the moment an account was created —
      * invite a bookkeeper into the house as a `member` and they arrived
      * flagged staff. Now it takes the invited ROLE as well, so an invitation

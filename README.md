@@ -76,9 +76,9 @@ each database role) and `test/e2e/better-auth.spec.ts` (both hosts in a real bro
 - **Sign in once** at the login host, then land already signed in on a site at a
   **genuinely different registrable domain**, with no second prompt, via a single-use
   ticket handoff.
-- **No passwords anywhere.** A first-time account gets a six-digit emailed code; once an
-  authenticator is enrolled, that code is what signs the account in and **the emailed code
-  stops working for it**. Ten single-use recovery codes are issued at enrolment.
+- **An authenticator after every way in.** Password, emailed code, Google or Microsoft is
+  only the first step; the second is always an authenticator app, with ten single-use
+  recovery codes issued at enrolment.
 - **Accounts are by invitation**, never by open registration — a portal holds several
   companies' data, and an address typed into a form says nothing about which company its
   owner belongs to.

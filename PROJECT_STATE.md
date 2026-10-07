@@ -4,7 +4,7 @@
 Phase 1 — Platform Hardening
 
 ## Current action
-Self-hosted sign-in (Better Auth) built on branch `claude/great-ptolemy-sd6k4e` in both repositories, replacing the never-deployed WorkOS integration (app PR #2). Not merged, not deployed; no production variables or DNS changed. Design, variables, provider setup, deployment order and rollback: `docs/better-auth-cutover.md`. Awaiting review, Railway variables (`BETTER_AUTH_SECRET`, `PORTAL_AUTH_PASSWORD`, `AUTH_DATABASE_URL` on login; `PORTAL_HOST`, `PRIMARY_HOST` on app) and optional Google/Microsoft credentials. Open decision: removing the legacy emailed-code sign-in files and their tests (left untouched; `test/act-as.test.ts` pins the old handoff's source and fails).
+Self-hosted sign-in (Better Auth) built on branch `claude/great-ptolemy-sd6k4e` in both repositories, replacing the never-deployed WorkOS integration (app PR #2). Not merged, not deployed; no production variables or DNS changed. Design, variables, provider setup, deployment order and rollback: `docs/better-auth-cutover.md`. Awaiting review, Railway variables (`BETTER_AUTH_SECRET`, `PORTAL_AUTH_PASSWORD`, `AUTH_DATABASE_URL` on login; `PORTAL_HOST`, `PRIMARY_HOST` on app) and optional Google/Microsoft credentials. The legacy emailed-code sign-in and its tests were removed at Paolo's request (2026-10-07); its tables stay.
 
 Previously: WorkOS sign-in foundation (superseded). Phase 1 / Enforced CI/security gates — PR #8 (`ci/database-security`) merged on 2026-10-06.
 

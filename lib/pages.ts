@@ -19,6 +19,10 @@
  * `id_code` is unique across every row the table has ever held, revoked ones
  * included.
  *
+ * Retired, never to be reused: `sign-in`, `sign-up`, `code`, `authenticator`
+ * and `recovery` — the emailed-code sign-in, replaced by the self-hosted sign-in
+ * (`login.*`) in October 2026.
+ *
  * Nothing foreign-keys to these codes, deliberately, for the same reason
  * nothing foreign-keys to `identities.id_code`. An iD is a public handle, not a
  * primary key.
@@ -88,58 +92,6 @@ export const PAGES: PageRecord[] = [
     audience: "public",
     kind: "machinery",
     file: "app/page.tsx",
-    group: "Getting in",
-  },
-  {
-    id: "sign-in",
-    path: "/auth/login",
-    name: "Sign in",
-    purpose: "Give your email address and we post you a six-digit code. No password exists to type.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/login/page.tsx",
-    group: "Getting in",
-  },
-  {
-    id: "sign-up",
-    path: "/auth/signup",
-    name: "Accept an invitation",
-    purpose: "Where an invited person turns their invitation into an account.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/signup/page.tsx",
-    group: "Getting in",
-  },
-  {
-    id: "code",
-    path: "/auth/verify",
-    name: "Six-digit code",
-    purpose: "Type the code from the email. Proves you hold the inbox.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/verify/page.tsx",
-    group: "Getting in",
-  },
-  {
-    id: "authenticator",
-    path: "/auth/2fa",
-    name: "Authenticator",
-    purpose:
-      "The second factor. Staff reach every client's data, and an inbox is the thing most likely to be taken, so holding it is not enough on its own.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/2fa/page.tsx",
-    group: "Getting in",
-  },
-  {
-    id: "recovery",
-    path: "/auth/recovery-codes",
-    name: "Recovery codes",
-    purpose:
-      "The one-time list shown when you enrol an authenticator. It is the answer to losing the phone, and it is shown once.",
-    audience: "public",
-    kind: "page",
-    file: "app/auth/recovery-codes/page.tsx",
     group: "Getting in",
   },
 

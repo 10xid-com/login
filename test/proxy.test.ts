@@ -72,9 +72,9 @@ describe("with PORTAL_HOST: the login host keeps only sign-in", () => {
 
   test("the sign-in screens and the handoff stay on the login host", () => {
     for (const path of [
-      "/auth/login",
-      "/auth/verify?email=a%40b.test",
-      "/auth/2fa",
+      "/auth/sign-in",
+      "/auth/verify-email?email=a%40b.test",
+      "/auth/mfa",
       "/auth/sso/authorize?site=x&state=y",
     ]) {
       expect(target(visit(LOGIN, path))).toBeNull();
@@ -95,8 +95,6 @@ describe("with PORTAL_HOST: the login host keeps only sign-in", () => {
   test("the handoff's own steps are left alone on the portal host", () => {
     expect(target(visit(PORTAL, "/auth/sso/start?path=%2F"))).toBeNull();
     expect(target(visit(PORTAL, "/auth/sso/callback?ticket=t&state=s"))).toBeNull();
-    // The second step acts on this host's own session, so it stays here too.
-    expect(target(visit(PORTAL, "/auth/2fa", { session: true }))).toBeNull();
   });
 
   test("machine endpoints answer on every host, never with a redirect", () => {
@@ -115,21 +113,21 @@ describe("sign-in screens exist on the login host only", () => {
     test(`elsewhere they forward to it (PORTAL_HOST=${portal || "unset"})`, () => {
       vi.stubEnv("PORTAL_HOST", portal);
       // Signing out of the portal lands here.
-      expect(target(visit(PORTAL, "/auth/login"))).toBe(
-        `https://${LOGIN}/auth/login`,
+      expect(target(visit(PORTAL, "/auth/sign-in"))).toBe(
+        `https://${LOGIN}/auth/sign-in`,
       );
-      expect(target(visit(CLIENT, "/auth/signup?next=%2F"))).toBe(
-        `https://${LOGIN}/auth/signup?next=%2F`,
+      expect(target(visit(CLIENT, "/auth/sign-up?next=%2F"))).toBe(
+        `https://${LOGIN}/auth/sign-up?next=%2F`,
       );
-      expect(target(visit(PORTAL, "/auth/verify?email=a%40b.test", { session: true }))).toBe(
-        `https://${LOGIN}/auth/verify?email=a%40b.test`,
+      expect(target(visit(PORTAL, "/auth/verify-email?email=a%40b.test", { session: true }))).toBe(
+        `https://${LOGIN}/auth/verify-email?email=a%40b.test`,
       );
     });
   }
 
   test("with no PRIMARY_HOST at all, nothing is redirected", () => {
     vi.stubEnv("PRIMARY_HOST", "");
-    expect(target(visit(PORTAL, "/auth/login"))).toBeNull();
+    expect(target(visit(PORTAL, "/auth/sign-in"))).toBeNull();
   });
 });
 

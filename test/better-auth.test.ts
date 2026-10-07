@@ -638,6 +638,17 @@ describe("the handoff ticket", () => {
   });
 });
 
+describe("the handoff names the bound account", () => {
+  test("the ticket's user is the account bound to the signed-in identity, never session-carried state", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("app/auth/sso/authorize/route.ts", "utf8");
+    expect(src).toContain("userByAuthUserId(session.user.id)");
+    expect(src).toContain("userId: account.id");
+    expect(src).toContain("if (!session.mfaVerifiedAt)");
+    expect(src).not.toContain("actingAs");
+  });
+});
+
 describe("where sign-in may resume", () => {
   test("only the handoff or the account page; everything else is home", () => {
     expect(safeNext("/auth/sso/authorize?site=x&state=y")).toBe("/auth/sso/authorize?site=x&state=y");

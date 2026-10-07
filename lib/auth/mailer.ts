@@ -75,48 +75,6 @@ export async function sendAuthCode(input: {
 }
 
 /**
- * The legacy emailed-code sign-in (lib/auth/codes.ts), kept unchanged until
- * that flow is removed. The Better Auth flow uses sendAuthCode above.
- */
-export async function sendSignInCode(input: {
-  to: string;
-  code: string;
-  expiresInMinutes: number;
-}): Promise<void> {
-  const apiKey = process.env.RESEND_API_KEY;
-
-  if (!apiKey) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error(
-        "RESEND_API_KEY is not set, so sign-in codes cannot be delivered. " +
-          "Refusing to fall back to writing codes to disk in production.",
-      );
-    }
-    const line = `${new Date().toISOString()}\t${input.to}\t${input.code}\n`;
-    await appendFile(DEV_CODE_SINK, line, "utf8");
-    console.log(`[dev] sign-in code for ${input.to}: ${input.code}`);
-    return;
-  }
-
-  const { Resend } = await import("resend");
-  const resend = new Resend(apiKey);
-
-  await resend.emails.send({
-    from: process.env.MAIL_FROM ?? "10XiD <no-reply@10xid.com>",
-    to: input.to,
-    subject: `${input.code} is your sign-in code`,
-    text: [
-      `Your sign-in code is ${input.code}.`,
-      ``,
-      `It expires in ${input.expiresInMinutes} minutes and can be used once.`,
-      ``,
-      `If you did not ask to sign in, you can ignore this message — the code`,
-      `is useless without access to this mailbox.`,
-    ].join("\n"),
-  });
-}
-
-/**
  * Tell somebody they have been invited.
  *
  * Carries no credential. The invitation lives in the database against this
