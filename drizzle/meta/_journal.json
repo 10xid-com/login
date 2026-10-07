@@ -169,6 +169,13 @@
       "when": 1790000700000,
       "tag": "0023_operator_functions",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790000800000,
+      "tag": "0024_role_matrix",
+      "breakpoints": true
     }
   ]
 }
