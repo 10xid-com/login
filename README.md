@@ -31,16 +31,17 @@ own session through the same handoff a client domain uses, with no second prompt
 1. **Domain.** Add `app.10xid.com` as a second custom domain on the `portal` service (or on
    a new service built from `main`, with the same environment). In Cloudflare: the CNAME,
    and the `_railway-verify.app` TXT record.
-2. **Register it** as a handoff destination, under the house company, as the owner
-   connection:
+2. **Register it** as a handoff destination, under the house company. This happens by
+   itself: the deploy step (`scripts/migrate.mjs`) registers `PORTAL_HOST` whenever it is
+   set, so step 4 does it. To register it by hand instead, as the owner connection:
 
    ```sql
    select id, name from organizations where type = 'internal';   -- expect one row
    insert into organization_domains (organization_id, hostname, is_primary, verified_at)
    select id, 'app.10xid.com', false, now() from organizations where type = 'internal';
    ```
-3. **Check** that `https://app.10xid.com/` signs you in through `login.10xid.com` and
-   lands on the dashboard.
+3. **Check** that `https://app.10xid.com/` answers with a valid certificate. (It can only
+   complete a sign-in once step 4 has registered it.)
 4. **Switch.** Set `PORTAL_HOST=app.10xid.com` on the service answering
    `login.10xid.com`, and redeploy. From then on every portal page asked for there is sent to
    `app.10xid.com`, the sign-in screens on any other host are sent to the login host, and
