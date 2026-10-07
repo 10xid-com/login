@@ -632,7 +632,9 @@ describe("no permanent takeover: the guard is on every route that could be one",
     // a full session as Joel on the destination, with no grant behind it — no
     // banner, no hour — which is exactly the takeover this block exists to stop.
     const src = readFileSync("app/auth/sso/authorize/route.ts", "utf8");
-    expect(src).toContain("userId: ctx.realUserId");
-    expect(src).not.toContain("userId: ctx.userId");
+    // The ticket names the account bound to the signed-in identity, never a session-carried one.
+    expect(src).toContain("userByAuthUserId(session.user.id)");
+    expect(src).toContain("userId: account.id");
+    expect(src).not.toContain("actingAs");
   });
 });
