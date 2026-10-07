@@ -40,6 +40,29 @@ select id, 'app.10xid.com', false, now() from organizations where type = 'intern
 prefixed and so is never shared between them. That is deliberate — a cookie scoped to
 `.10xid.com` could be read or overwritten by any other subdomain.
 
+## WorkOS (from 2026-10-07)
+
+Sign-in is moving to **WorkOS AuthKit**, built in `10xid-com/app` with its one callback at
+`https://app.10xid.com/callback`. Once that is live and `login.10xid.com` points at WorkOS's
+hosted sign-in, the sign-in screens below are retired; this repository keeps the schema, the
+migrations and the operator scripts.
+
+Migration `0021_workos_identity` adds what the app needs: `users.workos_user_id` (the identity
+key, set once — only an operator binds an existing account, enforced by a trigger),
+`identity_bindings` (the request an account from before WorkOS makes on its first WorkOS sign-in),
+and the six role templates on `membership_role`. Invitations now last seven days.
+
+An operator answers binding requests, connecting as the owner:
+
+```bash
+npm run identity:bindings -- list
+npm run identity:bindings -- confirm <request id> --operator "Full Name"
+npm run identity:bindings -- reject  <request id> --operator "Full Name"
+```
+
+Confirm only after checking with the person by another channel (a call to a number already on
+file) that they are the one who just signed in.
+
 ## What it does
 
 - **Sign in once** at the login host, then land already signed in on a site at a

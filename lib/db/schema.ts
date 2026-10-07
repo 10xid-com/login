@@ -37,11 +37,30 @@ export const organizationType = pgEnum("organization_type", [
   "client",
   "internal",
 ]);
+/**
+ * A direct member's role in one business.
+ *
+ * The first six are the role templates of the Revision 2 architecture. What
+ * each may do is decided in application code (the app's lib/auth/permissions.ts),
+ * not here: until the permission matrix is written, `owner` holds every action
+ * and the other five hold none.
+ *
+ * `member` and `staff` are the roles that came before them. Postgres cannot
+ * drop an enum value, and existing rows carry them, so they stay — but no
+ * action is granted to either. `staff` no longer means anything: staff access
+ * was turned off on 2026-10-07 (see 0021).
+ */
 export const membershipRole = pgEnum("membership_role", [
   "owner",
   "member",
   "staff",
+  "manager",
+  "editor",
+  "publisher",
+  "asset_manager",
+  "viewer",
 ]);
+export type MembershipRole = (typeof membershipRole.enumValues)[number];
 /**
  * Can people inside one organization see each other at all?
  *
@@ -155,6 +174,23 @@ export const organizationDomains = pgTable(
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
+  /**
+   * The WorkOS user id (`user_...`): the identity key. Who signed in is
+   * answered by WorkOS; this column is how that answer reaches a local account.
+   *
+   * Null on an account that has not yet signed in through WorkOS. Set exactly
+   * once and never changed (0021's trigger), and only two ways:
+   *
+   *   * on INSERT, when a verified address accepts an invitation made out to
+   *     exactly that address — the account is created already bound;
+   *   * by an operator confirming an `identity_bindings` request, for an
+   *     account that existed before WorkOS. The application role cannot do
+   *     this itself: the trigger refuses an UPDATE of this column from anybody
+   *     but the table owner.
+   *
+   * Never inferred from an email address at request time.
+   */
+  workosUserId: text("workos_user_id").unique(),
   /** Stored lowercase. The identity — there is no password column. */
   email: text("email").notNull().unique(),
   fullName: text("full_name"),
@@ -467,6 +503,44 @@ export const permissions = pgTable(
   (t) => [
     index("permissions_user_idx").on(t.userId, t.organizationId),
     index("permissions_org_capability_idx").on(t.organizationId, t.capability),
+  ],
+);
+
+/**
+ * An account that existed before WorkOS asking to be tied to a WorkOS user.
+ *
+ * The first time somebody signs in through WorkOS with a verified address that
+ * belongs to an existing, unbound account, the application records a request
+ * here and lets them no further. An operator checks it and confirms or rejects
+ * it (scripts/identity-bindings.mjs in 10xid-com/login); confirming is what
+ * sets users.workos_user_id, in the same transaction.
+ *
+ * The application role may INSERT and SELECT and nothing else, so it can ask
+ * but cannot answer. Matching an address is how a request is found, never how
+ * access is given.
+ */
+export const identityBindings = pgTable(
+  "identity_bindings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    workosUserId: text("workos_user_id").notNull(),
+    /** The verified address WorkOS reported, stored lowercase. */
+    email: text("email").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** `confirmed` or `rejected`; null while it waits. */
+    decision: text("decision"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    /** The operator who decided, by name. */
+    decidedBy: text("decided_by"),
+  },
+  (t) => [
+    index("identity_bindings_user_idx").on(t.userId),
+    index("identity_bindings_workos_user_idx").on(t.workosUserId),
   ],
 );
 
