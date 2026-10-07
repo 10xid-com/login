@@ -57,7 +57,22 @@ export default async function SessionsPage({
   const grant = ctx.scope.isStaff ? await liveGrantForSession(ctx.sessionId) : null;
   const actingOrg = grant ? await organizationById(grant.organizationId) : null;
 
-  const others = sessions.filter((s) => s.id !== ctx.sessionId).length;
+  /**
+   * One row per DEVICE, not per session. A browser holds a session on each
+   * host it has been handed to as well as the login host's, and they are one
+   * device: listing them apart would offer "sign out" on half of a browser, and
+   * count somebody's own login-host session among their other devices.
+   */
+  const deviceOf = (s: { id: string; sourceSessionId: string | null }) =>
+    s.sourceSessionId ?? s.id;
+  const devices = [...Map.groupBy(sessions, deviceOf).values()];
+  const thisDevice = deviceOf(
+    sessions.find((s) => s.id === ctx.sessionId) ?? {
+      id: ctx.sessionId,
+      sourceSessionId: null,
+    },
+  );
+  const others = devices.filter((d) => deviceOf(d[0]) !== thisDevice).length;
 
   return (
     <PortalShell
@@ -71,8 +86,8 @@ export default async function SessionsPage({
             Your sessions
           </h1>
           <p className="mt-1 max-w-prose text-sm text-ink-soft">
-            Each domain you have signed in on holds its own session, and they
-            last until you sign out. This screen is how you end one you no
+            Each device you have signed in on is listed with every domain it
+            holds a session on, and they last until you sign out. This screen is how you end one you no
             longer want — on a laptop left somewhere, say — and it takes effect
             on that session&rsquo;s very next request.
           </p>
@@ -102,20 +117,24 @@ export default async function SessionsPage({
       ) : null}
 
       <ul className="overflow-hidden rounded-xl border border-line bg-surface shadow-card divide-y divide-line-soft">
-        {sessions.map((session) => {
-          const isCurrent = session.id === ctx.sessionId;
+        {devices.map((device) => {
+          const isCurrent = deviceOf(device[0]) === thisDevice;
+          // Newest activity first, as the list is ordered.
+          const latest = device[0];
           return (
             <li
-              key={session.id}
+              key={deviceOf(latest)}
               className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
             >
               <div className="min-w-0 flex-1">
-                <p className="truncate font-mono text-sm text-ink">
-                  {session.issuedForHost}
-                </p>
+                {device.map((session) => (
+                  <p key={session.id} className="truncate font-mono text-sm text-ink">
+                    {session.issuedForHost}
+                  </p>
+                ))}
                 <p className="mt-0.5 text-xs text-ink-faint">
-                  {session.roleAtCreation} · last used {ago(session.lastSeenAt)} ·{" "}
-                  {lifetime(session.absoluteExpiresAt)}
+                  {latest.roleAtCreation} · last used {ago(latest.lastSeenAt)} ·{" "}
+                  {lifetime(latest.absoluteExpiresAt)}
                 </p>
               </div>
 
@@ -126,7 +145,7 @@ export default async function SessionsPage({
               ) : null}
 
               <form action={revokeSessionAction} className="flex-none">
-                <input type="hidden" name="sessionId" value={session.id} />
+                <input type="hidden" name="sessionId" value={latest.id} />
                 <button
                   type="submit"
                   className="rounded-md border border-line px-2.5 py-1 text-xs font-medium

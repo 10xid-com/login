@@ -68,6 +68,7 @@ export async function GET(request: NextRequest) {
     userId: redeemed.userId,
     host,
     secondFactorPassed: clearedSecondFactor,
+    sourceSessionId: redeemed.sourceSessionId,
   });
 
   await writeSessionCookie(

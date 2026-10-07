@@ -39,14 +39,15 @@ export async function GET(request: NextRequest) {
     return new NextResponse("Unknown destination.", { status: 400 });
   }
 
+  // The `next` value below is a path on this host, which is why it is safe to
+  // carry. Redirects are built from the Host header, not from request.url: in a
+  // route handler request.url reports the address the server is bound to, so
+  // using it here sends people to localhost instead of the login host.
+  const resume = `/auth/sso/authorize?site=${encodeURIComponent(site)}&state=${encodeURIComponent(state)}`;
+
   const ctx = await getSessionContext();
   if (!ctx) {
-    // Not signed in yet: sign in here, then resume exactly this handoff. The
-    // `next` value is a path on this host, which is why it is safe to carry.
-    const resume = `/auth/sso/authorize?site=${encodeURIComponent(site)}&state=${encodeURIComponent(state)}`;
-    // Built from the Host header, not from request.url: in a route handler
-    // request.url reports the address the server is bound to, so using it here
-    // sends people to localhost instead of the login host.
+    // Not signed in yet: sign in here, then resume exactly this handoff.
     return NextResponse.redirect(
       new URL(
         `/auth/login?next=${encodeURIComponent(resume)}`,
@@ -55,10 +56,24 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Staff who have passed the emailed code but not yet their authenticator
+  // finish signing in HERE before being handed anywhere. Handing them over
+  // half-done would move the second step onto the destination, and once the
+  // portal has a host of its own that is every staff sign-in.
+  if (ctx.needsSecondFactor) {
+    return NextResponse.redirect(
+      new URL(`/auth/2fa?next=${encodeURIComponent(resume)}`, originFor(host)),
+    );
+  }
+
   const token = secretToken(32);
   await mintTicket({
     ticketHash: hashTicket(token),
-    userId: ctx.userId,
+    // realUserId, not userId. While acting as somebody, userId is THEIR
+    // account, and a ticket for it would become a full session as them on the
+    // destination — one with no grant behind it, so no banner and no hour on
+    // it. The act-as grant belongs to this session and does not travel.
+    userId: ctx.realUserId,
     audienceHost: domain.hostname,
     returnPath: "/",
     // Tying the ticket to the session that minted it means signing out here

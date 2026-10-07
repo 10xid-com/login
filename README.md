@@ -17,6 +17,37 @@ Railway needs two records in Cloudflare, not one: the CNAME that routes traffic,
 `_railway-verify.<name>` TXT record proving ownership. With only the CNAME, the
 certificate sits at "issuing" indefinitely and browsers refuse the address.
 
+### Moving the portal to `app.10xid.com`
+
+The portal pages (dashboard, chat, jobs, team, staff…) can live on a host of their own,
+leaving `login.10xid.com` with nothing but sign-in. `PORTAL_HOST` switches this on; unset,
+nothing changes, so the code can be deployed before any of the steps below.
+
+`app.10xid.com` is a sibling of `login.10xid.com`, but the session cookie is `__Host-`
+prefixed and so is never shared between them. That is deliberate — a cookie scoped to
+`.10xid.com` could be read or overwritten by any other subdomain. The portal host gets its
+own session through the same handoff a client domain uses, with no second prompt.
+
+1. **Domain.** Add `app.10xid.com` as a second custom domain on the `portal` service (or on
+   a new service built from `main`, with the same environment). In Cloudflare: the CNAME,
+   and the `_railway-verify.app` TXT record.
+2. **Register it** as a handoff destination, under the house company, as the owner
+   connection:
+
+   ```sql
+   select id, name from organizations where type = 'internal';   -- expect one row
+   insert into organization_domains (organization_id, hostname, is_primary, verified_at)
+   select id, 'app.10xid.com', false, now() from organizations where type = 'internal';
+   ```
+3. **Check** that `https://app.10xid.com/` signs you in through `login.10xid.com` and
+   lands on the dashboard.
+4. **Switch.** Set `PORTAL_HOST=app.10xid.com` on the service answering
+   `login.10xid.com`, and redeploy. From then on every portal page asked for there is sent to
+   `app.10xid.com`, the sign-in screens on any other host are sent to the login host, and
+   staff finish their authenticator step on the login host before being handed over.
+
+Undoing it is unsetting `PORTAL_HOST`. The redirects are 307s, which browsers do not cache.
+
 ## What it does
 
 - **Sign in once** at the login host, then land already signed in on a site at a
@@ -82,6 +113,7 @@ ordinary cookie behaviour. Local development uses two separate registrable domai
 
 ```
 127.0.0.1  login.portal-a.test      # the only place sign-in happens
+127.0.0.1  app.portal-a.test        # the portal pages, when PORTAL_HOST is set
 127.0.0.1  rotary.portal-b.test     # a client domain
 127.0.0.1  northstar.portal-b.test  # a second client, so isolation has a target
 ```

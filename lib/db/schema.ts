@@ -1,4 +1,5 @@
 import {
+  type AnyPgColumn,
   bigint,
   bigserial,
   boolean,
@@ -514,8 +515,21 @@ export const sessions = pgTable(
       () => organizations.id,
     ),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    /**
+     * The login-host session this one was handed over from, or null for a
+     * session signed in to directly. Together they are one browser — one
+     * device — holding a session on each host it has visited, so "sign out
+     * here" ends the pair rather than leaving the login host to sign this host
+     * straight back in. See 0020.
+     */
+    sourceSessionId: uuid("source_session_id").references(
+      (): AnyPgColumn => sessions.id,
+    ),
   },
-  (t) => [index("sessions_user_idx").on(t.userId)],
+  (t) => [
+    index("sessions_user_idx").on(t.userId),
+    index("sessions_source_session_idx").on(t.sourceSessionId),
+  ],
 );
 
 export const signInCodes = pgTable(

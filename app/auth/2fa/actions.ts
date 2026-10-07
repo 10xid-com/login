@@ -15,7 +15,7 @@ import {
 } from "@/lib/db/identity";
 import { getSessionContext } from "@/lib/auth/session";
 import { refuseWhileActingAs } from "@/lib/auth/require";
-import { safePath } from "@/lib/auth/sso";
+import { afterSignIn, safePath } from "@/lib/auth/sso";
 import {
   decryptSecret,
   encryptSecret,
@@ -76,7 +76,7 @@ export async function verifySecondFactorAction(formData: FormData) {
   }
 
   // Land where they were originally heading, not on a fixed page.
-  redirect(next);
+  redirect(afterSignIn(next));
 }
 
 /**
@@ -133,7 +133,7 @@ export async function acknowledgeRecoveryCodesAction(formData: FormData) {
     path: "/auth",
     maxAge: 0,
   });
-  redirect(next);
+  redirect(afterSignIn(next));
 }
 
 /**

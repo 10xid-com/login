@@ -8,11 +8,14 @@ import {
   revokeOwnSession,
 } from "@/lib/db/identity";
 import { requireOwnAccount } from "@/lib/auth/require";
+import { getSessionContext } from "@/lib/auth/session";
+import { signInUrl } from "@/lib/auth/sso";
 
 /**
  * Revoking is scoped to the signed-in person by the query itself — the session
  * id in the form is matched against their own user id in the same statement.
- * Someone submitting a stranger's session id revokes nothing.
+ * Someone submitting a stranger's session id revokes nothing. What is revoked
+ * is the DEVICE that session is on (lib/db/identity.ts, revokeOwnSession).
  */
 export async function revokeSessionAction(formData: FormData) {
   // requireOwnAccount, not requireSession: ending somebody's other sessions
@@ -22,10 +25,11 @@ export async function revokeSessionAction(formData: FormData) {
   const parsed = z.uuid().safeParse(formData.get("sessionId"));
   if (!parsed.success) redirect("/account/sessions");
 
-  const endingThisOne = parsed.data === ctx.sessionId;
   await revokeOwnSession(ctx.userId, parsed.data);
 
-  if (endingThisOne) redirect("/auth/login");
+  // Signing out a device ends every session on it, so whether this one went
+  // too is read back rather than guessed from the id that was posted.
+  if (!(await getSessionContext())) redirect(signInUrl());
 
   revalidatePath("/account/sessions");
   redirect("/account/sessions?done=one");

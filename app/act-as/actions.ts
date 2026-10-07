@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getSessionContext } from "@/lib/auth/session";
 import { startActingAs, stopActingAs } from "@/lib/auth/act-as";
 import { GRANT_REASON_MAX, GRANT_REASON_MIN } from "@/lib/auth/policy";
+import { signInUrl } from "@/lib/auth/sso";
 
 /**
  * The two buttons. Everything they mean lives in lib/auth/act-as.ts.
@@ -23,7 +24,7 @@ const startSchema = z.object({
 
 export async function startActingAsAction(formData: FormData) {
   const ctx = await getSessionContext();
-  if (!ctx) redirect("/auth/login");
+  if (!ctx) redirect(signInUrl());
 
   const parsed = startSchema.safeParse({
     targetUserId: formData.get("targetUserId"),
@@ -54,7 +55,7 @@ export async function startActingAsAction(formData: FormData) {
 
 export async function stopActingAsAction() {
   const ctx = await getSessionContext();
-  if (!ctx) redirect("/auth/login");
+  if (!ctx) redirect(signInUrl());
 
   // No check beyond having a session: stopping is always allowed, and a
   // confirmation step on the way OUT of somebody else's account would be a

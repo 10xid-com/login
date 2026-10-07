@@ -20,6 +20,10 @@ const HOSTS = {
   // cookie behaviour, not cross-domain sign-in.
   rotary: process.env.SEED_HOST_ROTARY ?? "rotary.portal-b.test:3000",
   northstar: process.env.SEED_HOST_NORTHSTAR ?? "northstar.portal-b.test:3000",
+  // Where the portal pages live when PORTAL_HOST is set: a sibling of the login
+  // host, as app.10xid.com is of login.10xid.com. Registered either way, so
+  // switching PORTAL_HOST on locally needs no re-seed.
+  portal: process.env.SEED_HOST_PORTAL ?? "app.portal-a.test:3000",
 };
 
 const PEOPLE = {
@@ -104,6 +108,7 @@ async function main() {
 
   await domain(rotary, HOSTS.rotary);
   await domain(northstar, HOSTS.northstar);
+  await domain(internal, HOSTS.portal);
 
   const job = async (
     orgId: string,

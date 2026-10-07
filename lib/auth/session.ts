@@ -132,6 +132,11 @@ export async function startSession(input: {
    * when it was not.
    */
   secondFactorPassed?: boolean;
+  /**
+   * The login-host session that handed this browser over, when this session is
+   * the far end of a handoff. Recorded so the two are known to be one device.
+   */
+  sourceSessionId?: string;
 }): Promise<{ token: string; sessionId: string; role: SessionRole }> {
   const mships = await membershipsForUser(input.userId);
   /**
@@ -163,6 +168,7 @@ export async function startSession(input: {
     roleAtCreation: role,
     activeOrganizationId,
     secondFactorAt: input.secondFactorPassed ? new Date() : null,
+    sourceSessionId: input.sourceSessionId ?? null,
   });
 
   return { token, sessionId: session.id, role };

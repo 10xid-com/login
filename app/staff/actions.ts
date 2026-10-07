@@ -12,6 +12,7 @@ import {
 import { getSessionContext } from "@/lib/auth/session";
 import { refuseWhileActingAs } from "@/lib/auth/require";
 import { STAFF_GRANT_SECONDS } from "@/lib/auth/policy";
+import { signInUrl } from "@/lib/auth/sso";
 
 /**
  * Staff do not get ambient access to every client.
@@ -40,7 +41,7 @@ const chooseSchema = z.object({
 
 export async function chooseClientAction(formData: FormData) {
   const ctx = await getSessionContext();
-  if (!ctx) redirect("/auth/login");
+  if (!ctx) redirect(signInUrl());
 
   /**
    * Not while being somebody else.
@@ -90,7 +91,7 @@ export async function chooseClientAction(formData: FormData) {
 
 export async function exitClientAction(formData?: FormData) {
   const ctx = await getSessionContext();
-  if (!ctx) redirect("/auth/login");
+  if (!ctx) redirect(signInUrl());
   // Nor may somebody else give up a grant that is not theirs.
   refuseWhileActingAs(ctx);
 

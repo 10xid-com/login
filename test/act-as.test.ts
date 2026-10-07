@@ -650,6 +650,15 @@ describe("no permanent takeover: the guard is on every route that could be one",
     expect(src).not.toContain("signOutEverywhere(ctx.userId");
   });
 
+  test("the handoff hands over the REAL person, never the one being worn", () => {
+    // Acting as Joel, `ctx.userId` IS Joel. A ticket minted for it would become
+    // a full session as Joel on the destination, with no grant behind it — no
+    // banner, no hour — which is exactly the takeover this block exists to stop.
+    const src = readFileSync("app/auth/sso/authorize/route.ts", "utf8");
+    expect(src).toContain("userId: ctx.realUserId");
+    expect(src).not.toContain("userId: ctx.userId");
+  });
+
   test("the act-as action decides from the REAL identity, never the worn one", () => {
     const src = readFileSync("app/act-as/actions.ts", "utf8");
     expect(src).toContain("realUserId: ctx.realUserId");

@@ -24,7 +24,9 @@ test.describe("active sessions", () => {
     await expect(page.getByText("this device")).toBeVisible();
   });
 
-  test("a session on another domain appears as its own entry", async ({ page }) => {
+  // Listed under this device rather than as another one: the browser holds a
+  // session on each domain it was handed to, and they are one device (0020).
+  test("a session on another domain is listed, under this device", async ({ page }) => {
     await signIn(page, CLIENT, "/jobs");
 
     // Cross to the client domain, which establishes its own first-party session.

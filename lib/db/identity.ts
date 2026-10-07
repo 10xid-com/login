@@ -445,6 +445,8 @@ export async function insertSession(input: {
   roleAtCreation: string;
   activeOrganizationId: string | null;
   secondFactorAt: Date | null;
+  /** The login-host session this one was handed over from, if any. */
+  sourceSessionId?: string | null;
 }) {
   const rows = await db.insert(sessions).values(input).returning();
   return rows[0];
@@ -491,6 +493,38 @@ export async function revokeAllSessionsForUser(userId: string) {
 }
 
 /** Sign out every other device, keeping the one being used right now. */
+/**
+ * The device a session belongs to, as the id every session of it shares.
+ *
+ * A session signed in to directly is a device of its own, so its key is its own
+ * id; a session the handoff created belongs to the login-host session it came
+ * from (see 0020). The lookup is confined to `userId`'s own sessions, so a
+ * stranger's id names no device of theirs and falls back to itself, which then
+ * matches nothing this person holds.
+ */
+function deviceOf(userId: string, sessionId: string) {
+  return sql`coalesce(
+    (select s.source_session_id from sessions s
+      where s.id = ${sessionId} and s.user_id = ${userId}),
+    ${sessionId}::uuid
+  )`;
+}
+
+/**
+ * Every session on the same device as `sessionId`, this one included.
+ *
+ * Never NULL: source_session_id is null on every session signed in to
+ * directly, and a bare `source_session_id = device` would make the whole
+ * condition unknown for those — which `not (...)` then quietly treats as
+ * neither on the device nor off it, skipping exactly the sessions a "sign out
+ * every other device" is for.
+ */
+function onDevice(userId: string, sessionId: string) {
+  const device = deviceOf(userId, sessionId);
+  return sql`(${sessions.id} = ${device} or coalesce(${sessions.sourceSessionId} = ${device}, false))`;
+}
+
+/** Sign out every other device: everything except this browser's sessions. */
 export async function revokeOtherSessionsForUser(
   userId: string,
   keepSessionId: string,
@@ -502,27 +536,33 @@ export async function revokeOtherSessionsForUser(
       and(
         eq(sessions.userId, userId),
         isNull(sessions.revokedAt),
-        sql`${sessions.id} <> ${keepSessionId}`,
+        sql`not ${onDevice(userId, keepSessionId)}`,
       ),
     )
     .returning({ id: sessions.id });
   return rows.length;
 }
 
-/** Revoke one session, but only if it belongs to this person. */
+/**
+ * Sign out one device, but only if it belongs to this person.
+ *
+ * The device, not the one session: ending only the portal's session would
+ * leave the login host's, and the next page would hand the browser straight
+ * back in.
+ */
 export async function revokeOwnSession(userId: string, sessionId: string) {
   const rows = await db
     .update(sessions)
     .set({ revokedAt: new Date() })
     .where(
       and(
-        eq(sessions.id, sessionId),
         eq(sessions.userId, userId),
         isNull(sessions.revokedAt),
+        onDevice(userId, sessionId),
       ),
     )
     .returning({ id: sessions.id });
-  return rows.length === 1;
+  return rows.length > 0;
 }
 
 export async function activeSessionsForUser(userId: string) {
@@ -534,6 +574,7 @@ export async function activeSessionsForUser(userId: string) {
       lastSeenAt: sessions.lastSeenAt,
       absoluteExpiresAt: sessions.absoluteExpiresAt,
       roleAtCreation: sessions.roleAtCreation,
+      sourceSessionId: sessions.sourceSessionId,
     })
     .from(sessions)
     .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))

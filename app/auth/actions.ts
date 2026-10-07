@@ -12,6 +12,7 @@ import {
   writeSessionCookie,
 } from "@/lib/auth/session";
 import { SESSION_POLICY } from "@/lib/auth/policy";
+import { afterSignIn, signInUrl } from "@/lib/auth/sso";
 
 /**
  * A "where were you going" value is always a PATH on this host, never a URL.
@@ -119,7 +120,7 @@ export async function verifyCodeAction(formData: FormData) {
     new Date(Date.now() + SESSION_POLICY[role].absoluteSeconds * 1000),
   );
 
-  redirect(next);
+  redirect(afterSignIn(next));
 }
 
 export async function signOutAction() {
@@ -136,5 +137,5 @@ export async function signOutAction() {
      */
     await signOutEverywhere(ctx.realUserId, ctx.sessionId);
   }
-  redirect("/auth/login");
+  redirect(signInUrl());
 }
