@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { afterSignIn } from "@/lib/auth/sso";
 import { getSessionContext } from "@/lib/auth/session";
 import { refuseWhileActingAs } from "@/lib/auth/require";
 import { userById } from "@/lib/db/identity";
@@ -37,8 +38,8 @@ export default async function SecondFactorPage({
   const ctx = await getSessionContext();
   if (!ctx) redirect("/auth/login");
   refuseWhileActingAs(ctx);
-  if (ctx.role !== "staff") redirect("/jobs");
-  if (!ctx.needsSecondFactor) redirect("/jobs");
+  if (ctx.role !== "staff") redirect(afterSignIn("/jobs"));
+  if (!ctx.needsSecondFactor) redirect(afterSignIn("/jobs"));
 
   const params = await searchParams;
   const error = params.error ? ERRORS[params.error] : null;

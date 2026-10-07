@@ -1,21 +1,22 @@
 import { redirect } from "next/navigation";
-import { getSessionContext } from "@/lib/auth/session";
+import { connection } from "next/server";
+import { PORTAL_HOST, afterSignIn } from "@/lib/auth/sso";
 
 /**
- * The portal has no public landing page. Every route is behind a sign-in, which
- * is what makes cross-domain sign-in tractable: a cold visit to any client
- * domain can simply redirect to the login host, which knows whether the person
- * is signed in, and send them straight back.
- *
- * Sign-in returns here when nobody asked for a particular page, so this is
- * where staff are sent to the chat and everybody else to their dashboard. The
- * session is only read to choose between the two: both pages make their own
- * checks, so a wrong guess here costs a redirect and grants nothing.
+ * The login host has no pages of its own beyond sign-in. The portal is
+ * 10xid-com/app, at PORTAL_HOST, and proxy.ts sends every other path there
+ * before it reaches this file — so this is only reached when PORTAL_HOST is
+ * not configured, and says so rather than redirecting in a circle.
  */
 export default async function Home() {
-  const ctx = await getSessionContext();
-  // `role`, not `scope.isStaff`: a staff session still owed its second factor
-  // has no staff scope yet, but it is about to, and the authenticator screen
-  // should carry it on to the chat rather than to the dashboard.
-  redirect(ctx?.role === "staff" ? "/chat" : "/dashboard");
+  // Decided per request, never at build time: a build without PORTAL_HOST must
+  // not bake "not configured" into a page that is configured when it runs.
+  await connection();
+  if (PORTAL_HOST) redirect(afterSignIn("/"));
+  return (
+    <main className="mx-auto max-w-md p-8 text-sm text-ink-soft">
+      PORTAL_HOST is not configured, so there is nowhere to send you after
+      signing in. Set it to the portal&apos;s host (app.10xid.com).
+    </main>
+  );
 }

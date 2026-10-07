@@ -40,7 +40,7 @@ export async function verifySecondFactorAction(formData: FormData) {
 
   // Only staff carry a second factor. A client reaching this form has nothing
   // to do here.
-  if (ctx.role !== "staff") redirect("/jobs");
+  if (ctx.role !== "staff") redirect(afterSignIn("/jobs"));
 
   const next = safePath(formData.get("next"));
   const back = (err: string) =>
@@ -149,7 +149,7 @@ export async function beginEnrolmentAction(formData: FormData) {
   const ctx = await getSessionContext();
   if (!ctx) redirect("/auth/login");
   refuseWhileActingAs(ctx);
-  if (ctx.role !== "staff") redirect("/jobs");
+  if (ctx.role !== "staff") redirect(afterSignIn("/jobs"));
 
   const user = await userById(ctx.userId);
   if (user?.totpConfirmedAt) redirect("/auth/2fa?error=already");

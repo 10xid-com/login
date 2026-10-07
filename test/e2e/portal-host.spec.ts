@@ -11,13 +11,9 @@ import {
 } from "./helpers";
 
 /**
- * The portal on a host of its own (PORTAL_HOST), with the login host keeping
- * nothing but sign-in.
- *
- * Only meaningful when the dev server was started with PORTAL_HOST set, so the
- * spec skips itself otherwise:
- *
- *   PORTAL_HOST=app.portal-a.test:3000 npx playwright test portal-host
+ * Sign-in here, the portal on its own host (10xid-com/app, PORTAL_HOST), and
+ * the two working as one: signing in ends on the portal, the portal sends
+ * every sign-in screen here, and signing out from the portal really ends it.
  *
  * app.portal-a.test is a sibling of login.portal-a.test, as app.10xid.com is of
  * login.10xid.com. The session cookie is __Host- prefixed and so cannot be
@@ -25,15 +21,13 @@ import {
  * is what these tests prove happens without a second prompt.
  */
 
-const PORTAL_HOST = process.env.PORTAL_HOST ?? "";
+const PORTAL_HOST = process.env.E2E_APP_HOST ?? "app.portal-a.test:3001";
 const LOGIN_HOST = process.env.E2E_PRIMARY_HOST ?? "login.portal-a.test:3000";
 const PORTAL = `http://${PORTAL_HOST}`;
 const LOGIN = `http://${LOGIN_HOST}`;
 
 const CLIENT = "jane@rotary.test";
 const STAFF = "paolo@brandingcentres.test";
-
-test.skip(!PORTAL_HOST, "PORTAL_HOST is not set for this run");
 
 function recordHops(page: Page) {
   const hops: string[] = [];
