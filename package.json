@@ -17,7 +17,8 @@
     "db:rls-check": "tsx scripts/check-rls.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "db:migrate:prod": "node scripts/migrate.mjs"
+    "db:migrate:prod": "node scripts/migrate.mjs",
+    "db:certify-copy": "node scripts/certify-copy.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
