@@ -71,7 +71,7 @@ export default async function OperatorPage({
       <div className="mx-auto max-w-3xl space-y-8">
         <header className="flex items-baseline justify-between">
           <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-brand">10XiD</div>
+            <div className="text-xs font-semibold tracking-[0.06em] text-brand">10XiD</div>
             <h1 className="mt-1 text-xl font-semibold text-ink">Operator</h1>
             <p className="mt-1 text-sm text-ink-soft">
               Signed in as {op.email}.{" "}

@@ -35,4 +35,13 @@ describe("code emails", () => {
       expect(link).not.toContain("386254");
     }
   });
+
+  test("the HTML version has the code and a button to the same page, and escapes the address", () => {
+    const { html } = codeMessage({ to: 'a"<b>@test.invalid', code: "386254", purpose: "sign-in", expiresInMinutes: 10 });
+    expect(html).toContain(">386254<");
+    expect(html).toContain('href="https://login.10xid.com/auth/sign-in/code?email=a%22%3Cb%3E%40test.invalid"');
+    expect(html).not.toContain("<b>");
+    const href = html.match(/href="([^"]+)"/)![1]!;
+    expect(href).not.toContain("386254");
+  });
 });

@@ -464,3 +464,35 @@ test("operator screen: invite, then a code is asked for once five minutes have p
   expect(factors?.n).toBe(0);
   await theirs.close();
 });
+
+test("send a new code: the newest works, the one before it does not; the emailed link resumes the handoff", async ({ page, context }) => {
+  const email = await invite("resend");
+
+  // Start from a portal deep link, so sign-in is resuming a handoff.
+  await page.goto(`${APP}/jobs`);
+  await page.getByRole("link", { name: "Email me a code instead" }).click();
+  await page.getByLabel("Email").fill(email);
+  await page.getByRole("button", { name: "Email me a code" }).click();
+  const first = await codeFor(email, "sign-in");
+  await page.getByRole("button", { name: "Send a new code" }).click();
+  await expect(page.getByRole("status")).toContainText("A new code is on its way");
+  let second = await codeFor(email, "sign-in");
+  for (let i = 0; i < 20 && second === first; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    second = await codeFor(email, "sign-in");
+  }
+  expect(second).not.toBe(first);
+
+  // Open the emailed link in a new tab: no `next` in it, but the handoff resumes.
+  const tab = await context.newPage();
+  await tab.goto(`${LOGIN}/auth/sign-in/code?email=${encodeURIComponent(email)}`);
+  await tab.getByLabel("Code").fill(first);
+  await tab.getByRole("button", { name: "Continue" }).click();
+  await expect(tab.getByRole("alert")).toContainText("not right");
+  await tab.getByLabel("Code").fill(second);
+  await tab.getByRole("button", { name: "Continue" }).click();
+  await enrolFromPage(tab);
+  await tab.getByRole("button", { name: /saved them/ }).click();
+  // Back on exactly the page the visit started from.
+  await expect(tab).toHaveURL(`${APP}/jobs`);
+});

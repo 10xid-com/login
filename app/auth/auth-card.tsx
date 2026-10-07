@@ -22,7 +22,7 @@ export function AuthCard({
     <main className="min-h-dvh bg-ground flex flex-col items-center justify-center px-4 py-12">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-brand">
+          <div className="text-xs font-semibold tracking-[0.06em] text-brand">
             10XiD
           </div>
         </div>

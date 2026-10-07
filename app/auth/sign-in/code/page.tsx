@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
-import { nextQuery, safeNext } from "@/lib/auth/login";
+import { nextQuery } from "@/lib/auth/login";
+import { resumeFor } from "@/lib/auth/resume";
 import { requestSignInCodeAction, signInWithCodeAction } from "../../identity-actions";
 import { AuthCard, FieldError, SubmitButton, inputClass, labelClass } from "../../auth-card";
-import { Hidden, Notice, TextLink } from "../../flow-ui";
+import { Hidden, Notice, SecondaryButton, TextLink } from "../../flow-ui";
 
 export const metadata: Metadata = { title: "Sign in with a code" };
 
@@ -19,7 +20,7 @@ export default async function SignInCodePage({
   searchParams: Promise<{ error?: string; next?: string; email?: string; notice?: string }>;
 }) {
   const params = await searchParams;
-  const next = safeNext(params.next);
+  const next = await resumeFor(params.next);
   const error = params.error ? ERRORS[params.error] : null;
 
   if (!params.email || params.notice === "prove") {
@@ -44,7 +45,11 @@ export default async function SignInCodePage({
   return (
     <AuthCard title="Check your email"
       footer={<TextLink href={`/auth/sign-in/code${nextQuery(next)}`}>Use a different address</TextLink>}>
-      <Notice>If {params.email} can sign in to 10XiD, a code is on its way. It lasts ten minutes.</Notice>
+      <Notice>
+        {params.notice === "resent"
+          ? `A new code is on its way to ${params.email}. Use the newest one; the one before it no longer works.`
+          : `If ${params.email} can sign in to 10XiD, a code is on its way. It lasts ten minutes.`}
+      </Notice>
       <form action={signInWithCodeAction}>
         <Hidden name="next" value={next} />
         <Hidden name="email" value={params.email} />
@@ -53,6 +58,12 @@ export default async function SignInCodePage({
           maxLength={6} required autoFocus className={inputClass} />
         {error ? <FieldError>{error}</FieldError> : null}
         <SubmitButton>Continue</SubmitButton>
+      </form>
+      <form action={requestSignInCodeAction} className="mt-3">
+        <Hidden name="next" value={next} />
+        <Hidden name="email" value={params.email} />
+        <Hidden name="resend" value="1" />
+        <SecondaryButton>Send a new code</SecondaryButton>
       </form>
     </AuthCard>
   );
