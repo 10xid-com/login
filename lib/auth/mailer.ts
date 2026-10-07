@@ -1,5 +1,6 @@
 import "server-only";
 import { appendFile } from "node:fs/promises";
+import { PRIMARY_HOST, originFor } from "./sso";
 
 /**
  * Delivery of one-time codes: signing in, verifying an address, resetting a
@@ -34,6 +35,43 @@ const OPENING: Record<CodePurpose, string> = {
   "forget-password": "Your code to reset your password is",
 };
 
+/** Where the code is typed in. A sign-in code and a reset code have different pages. */
+const ENTRY_PATH: Record<CodePurpose, string> = {
+  "sign-in": "/auth/sign-in/code",
+  "email-verification": "/auth/sign-in/code",
+  "forget-password": "/auth/reset-password",
+};
+
+/**
+ * The message for one code.
+ *
+ * It links to the page where the code is entered, with the address already
+ * filled in, so it can be opened from the mail. The link never carries the
+ * code itself: mail scanners follow links on arrival, and a link that signed
+ * somebody in would be spent by the scanner (or by whoever it was forwarded
+ * to). Typing the code is what proves the person reading the mail is there.
+ */
+export function codeMessage(input: {
+  to: string;
+  code: string;
+  purpose: CodePurpose;
+  expiresInMinutes: number;
+}): { subject: string; text: string } {
+  const link = `${originFor(PRIMARY_HOST)}${ENTRY_PATH[input.purpose]}?email=${encodeURIComponent(input.to)}`;
+  return {
+    subject: SUBJECT[input.purpose](input.code),
+    text: [
+      `${OPENING[input.purpose]} ${input.code}.`,
+      ``,
+      `Enter it here: ${link}`,
+      ``,
+      `It expires in ${input.expiresInMinutes} minutes and can be used once.`,
+      ``,
+      `If you did not ask for this, you can ignore this message — the code is useless without access to this mailbox.`,
+    ].join("\n"),
+  };
+}
+
 export async function sendAuthCode(input: {
   to: string;
   code: string;
@@ -61,15 +99,7 @@ export async function sendAuthCode(input: {
   const { error } = await resend.emails.send({
     from: process.env.MAIL_FROM ?? "10XiD <no-reply@10xid.com>",
     to: input.to,
-    subject: SUBJECT[input.purpose](input.code),
-    text: [
-      `${OPENING[input.purpose]} ${input.code}.`,
-      ``,
-      `It expires in ${input.expiresInMinutes} minutes and can be used once.`,
-      ``,
-      `If you did not ask for this, you can ignore this message — the code`,
-      `is useless without access to this mailbox.`,
-    ].join("\n"),
+    ...codeMessage(input),
   });
   if (error) throw new Error(`Resend refused the message: ${error.name}`);
 }
