@@ -26,12 +26,19 @@ A custom domain on Railway needs two records in Cloudflare, not one: the CNAME t
 routes traffic, and a `_railway-verify.<name>` TXT record proving ownership. With only
 the CNAME, the certificate sits at "issuing" indefinitely and browsers refuse the address.
 
-To register the portal host as a handoff destination, as the owner connection:
+The portal host is a handoff destination like a client domain, so it needs a row in
+`organization_domains` under the house company. The deploy step (`scripts/migrate.mjs`,
+Railway's pre-deploy command) registers `PORTAL_HOST` there whenever it is set. To do it by
+hand instead, as the owner connection:
 
 ```sql
 insert into organization_domains (organization_id, hostname, is_primary, verified_at)
 select id, 'app.10xid.com', false, now() from organizations where type = 'internal';
 ```
+
+`app.10xid.com` and `login.10xid.com` are siblings, but the session cookie is `__Host-`
+prefixed and so is never shared between them. That is deliberate — a cookie scoped to
+`.10xid.com` could be read or overwritten by any other subdomain.
 
 ## What it does
 

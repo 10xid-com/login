@@ -123,6 +123,7 @@ try {
   }
   await bootstrap(pool);
   await registerClientDomains(pool);
+  await registerPortalHost(pool);
 } catch (error) {
   console.error("Migration failed:", error);
   process.exitCode = 1;
@@ -273,4 +274,42 @@ async function registerClientDomains(pool) {
     );
     console.log(`Domain registered: ${hostname} → ${slug}`);
   }
+}
+
+/**
+ * Register the portal's own host (PORTAL_HOST, e.g. app.10xid.com).
+ *
+ * The portal is a handoff destination like any client domain, so it needs a
+ * row in organization_domains — under the house, the one internal company, not
+ * under a client. Doing it here means setting PORTAL_HOST on the login service
+ * is the whole of the switch: the redeploy that the variable change triggers
+ * registers the host before the new server starts sending people to it.
+ *
+ * Idempotent, like registerClientDomains. Skips, with a warning, rather than
+ * guessing when there is not exactly one internal company.
+ */
+async function registerPortalHost(pool) {
+  const hostname = process.env.PORTAL_HOST?.trim().toLowerCase();
+  const primary = process.env.PRIMARY_HOST?.trim().toLowerCase();
+  if (!hostname || hostname === primary) return;
+
+  const { rows } = await pool.query(
+    "select id from organizations where type = 'internal'",
+  );
+  if (rows.length !== 1) {
+    console.warn(
+      `Skipping portal host "${hostname}": expected one internal company, found ${rows.length}.`,
+    );
+    return;
+  }
+
+  await pool.query(
+    `insert into organization_domains (organization_id, hostname, is_primary, verified_at)
+     values ($1, $2, false, now())
+     on conflict (hostname) do update
+       set organization_id = excluded.organization_id,
+           verified_at = now()`,
+    [rows[0].id, hostname],
+  );
+  console.log(`Portal host registered: ${hostname}`);
 }
