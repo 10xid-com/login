@@ -67,6 +67,12 @@ const EXEMPT: Record<string, string> = {
     "Read to work out which client businesses an agency person may open. " +
     "Like memberships, it PRODUCES the scope, so it cannot require one. Its " +
     "rules (who may ask, approve, widen or end) are 0025's triggers.",
+  agency_grant_reminders:
+    "Delivery bookkeeping for agency-grant expiry reminders: which grant, " +
+    "which recipient, whether it went. Read and written only by the " +
+    "scheduled reminder run, which works across every business by design; " +
+    "it holds ids and a delivery error, no business content. Its rules " +
+    "(claimed once, sent is final, only failures retried) are 0026's trigger.",
   connections:
     "Holds rows with a NULL organization_id — two people who scanned each " +
     "other's iD know each other personally, and that belongs to no company. " +

@@ -69,6 +69,10 @@ afterAll(async () => {
   const ids = Object.values(org);
   await owner.query("delete from audit_events where organization_id = any($1::uuid[])", [ids]);
   await owner.query(
+    "delete from agency_grant_reminders where grant_id in (select id from agency_grants where client_organization_id = any($1::uuid[]))",
+    [ids],
+  );
+  await owner.query(
     "delete from agency_grant_people where grant_id in (select id from agency_grants where client_organization_id = any($1::uuid[]))",
     [ids],
   );
@@ -254,6 +258,122 @@ describe("ending access", () => {
     expect(
       await err(app.query("update agency_grants set status = 'revoked', revoked_by = $2 where id = $1", [g.id, who["agency-owner"]])),
     ).toBe("ok");
+  });
+});
+
+describe("renewal (0026)", () => {
+  // other-client has nothing open by now: a declined request, then a withdrawn one.
+  let first = "";
+  let renewal = "";
+  const activeFor = async () =>
+    (
+      await owner.query(
+        "select id from agency_grants where client_organization_id = $1 and status = 'active' order by expires_at",
+        [org["other-client"]],
+      )
+    ).rows.map((r) => r.id as string);
+
+  test("nothing to ask for while access has more than seven days to run", async () => {
+    first = await request("agency-owner", "other-client", { days: 30 });
+    expect(await err(approve(first, "other-owner", 30))).toBe("ok");
+    expect(await err(request("agency-owner", "other-client"))).toMatch(/last seven days/);
+  });
+
+  test("in its last seven days the agency asks again; the database records what it renews", async () => {
+    expect(await err(app.query("update agency_grants set expires_at = now() + interval '6 days' where id = $1", [first]))).toBe("ok");
+    renewal = await request("agency-owner", "other-client");
+    expect(await grantRow(renewal)).toMatchObject({ status: "requested", renews_grant_id: first, decided_by: null });
+    // One waiting request at a time.
+    expect(await err(request("agency-owner", "other-client"))).toMatch(/agency_grants_one_open_idx/);
+    // What it renews is not the portal's to say, or to change.
+    expect(await err(app.query("update agency_grants set renews_grant_id = null where id = $1", [renewal]))).toMatch(
+      /cannot be rewritten/,
+    );
+  });
+
+  test("it is a new decision: the business's owner approves it, and every person again", async () => {
+    expect(await err(approve(renewal, "client-manager"))).toMatch(/Only an owner of the business can approve/);
+    expect(await err(approve(renewal, "agency-owner"))).toMatch(/Only an owner of the business can approve/);
+    expect(await err(approve(renewal, "other-owner", 90))).toBe("ok");
+    expect(
+      await err(
+        app.query(
+          "insert into agency_grant_people (grant_id, user_id, added_by, status, decided_by, decided_at) values ($1, $2, $3, 'approved', $4, now())",
+          [renewal, who["agency-viewer"], who["agency-owner"], who["other-owner"]],
+        ),
+      ),
+    ).toMatch(/starts as a request the business approves/);
+    expect(
+      await err(app.query("insert into agency_grant_people (grant_id, user_id, added_by) values ($1, $2, $3)", [renewal, who["agency-viewer"], who["agency-owner"]])),
+    ).toBe("ok");
+    // The grant it renews keeps its own end date; nothing was extended in place.
+    expect(await activeFor()).toEqual([first, renewal]);
+    const old = await grantRow(first);
+    expect(new Date(old.expires_at).getTime()).toBeLessThan(Date.now() + 7 * 86_400_000);
+  });
+
+  test("once access has run out, the agency may ask again", async () => {
+    for (const id of await activeFor()) {
+      expect(await err(app.query("update agency_grants set expires_at = now() - interval '1 second' where id = $1", [id]))).toBe("ok");
+    }
+    const again = await request("agency-owner", "other-client");
+    expect((await grantRow(again)).renews_grant_id).toBe(renewal);
+    expect(
+      await err(app.query("update agency_grants set status = 'revoked', revoked_by = $2 where id = $1", [again, who["agency-owner"]])),
+    ).toBe("ok");
+  });
+});
+
+describe("expiry reminders (0026)", () => {
+  const claim = (grant: string, user: string) =>
+    app.query("insert into agency_grant_reminders (grant_id, user_id) values ($1, $2) returning id, status, attempts", [grant, user]);
+  let grant = "";
+
+  test("claimed once per grant, person and kind", async () => {
+    grant = (await owner.query("select id from agency_grants where client_organization_id = $1 order by requested_at limit 1", [org["other-client"]])).rows[0].id;
+    expect((await claim(grant, who["other-owner"]!)).rows[0]).toMatchObject({ status: "sending", attempts: 1 });
+    expect(await err(claim(grant, who["other-owner"]!))).toMatch(/agency_grant_reminders_once/);
+    expect(
+      await err(
+        app.query("insert into agency_grant_reminders (grant_id, user_id, status, sent_at) values ($1, $2, 'sent', now())", [
+          grant,
+          who["agency-owner"],
+        ]),
+      ),
+    ).toMatch(/starts as a claim/);
+  });
+
+  test("sent is final", async () => {
+    const q = "update agency_grant_reminders set status = $3 where grant_id = $1 and user_id = $2 returning sent_at";
+    const sent = await app.query(q, [grant, who["other-owner"], "sent"]);
+    expect(sent.rows[0].sent_at).toBeInstanceOf(Date);
+    expect(await err(app.query(q, [grant, who["other-owner"], "failed"]))).toMatch(/sent reminder is final/);
+    expect(
+      await err(app.query("update agency_grant_reminders set grant_id = gen_random_uuid() where grant_id = $1", [grant])),
+    ).toMatch(/cannot be rewritten/);
+  });
+
+  test("a failure may be tried again, counted, at most five times", async () => {
+    await claim(grant, who["agency-owner"]!);
+    const where = [grant, who["agency-owner"]];
+    expect(await err(app.query("update agency_grant_reminders set status = 'failed', last_error = 'timeout' where grant_id = $1 and user_id = $2", where))).toBe("ok");
+    // A retry is a new claim, and counts.
+    expect(await err(app.query("update agency_grant_reminders set status = 'sending' where grant_id = $1 and user_id = $2", where))).toMatch(
+      /cannot go from failed to sending/,
+    );
+    for (let attempt = 2; attempt <= 5; attempt++) {
+      expect(
+        await err(app.query("update agency_grant_reminders set status = 'sending', attempts = attempts + 1 where grant_id = $1 and user_id = $2", where)),
+      ).toBe("ok");
+      expect(await err(app.query("update agency_grant_reminders set status = 'failed' where grant_id = $1 and user_id = $2", where))).toBe("ok");
+    }
+    expect(
+      await err(app.query("update agency_grant_reminders set status = 'sending', attempts = attempts + 1 where grant_id = $1 and user_id = $2", where)),
+    ).toMatch(/agency_grant_reminders_attempts/);
+  });
+
+  test("the record of reminders is kept: no deleting", async () => {
+    expect(await err(app.query("delete from agency_grant_reminders where grant_id = $1", [grant]))).toMatch(/permission denied/);
   });
 });
 
