@@ -58,6 +58,10 @@ export async function decideBindingAction(form: FormData) {
   const id = uuid.safeParse(form.get("request"));
   const decision = form.get("decision");
   if (!id.success || (decision !== "confirm" && decision !== "reject")) back({ error: "invalid" });
+  // The first operator confirms their own request and nothing else.
+  if (op.bootstrapRequestId && (id.data !== op.bootstrapRequestId || decision !== "confirm")) {
+    back({ error: "first_operator" });
+  }
   const outcome = await decideBinding(id.data, decision === "confirm", op.name);
   logOperator(op, `binding.${decision}`, id.data, outcome);
   if (outcome === "confirmed" || outcome === "rejected") back({ notice: outcome });
@@ -66,6 +70,7 @@ export async function decideBindingAction(form: FormData) {
 
 export async function inviteAction(form: FormData) {
   const op = await operatorWithStepUp(form);
+  if (op.bootstrapRequestId) back({ error: "first_operator" });
   const address = email.safeParse(form.get("email"));
   const business = uuid.safeParse(form.get("business"));
   const role = z.enum(INVITE_ROLES).safeParse(form.get("role"));
@@ -82,6 +87,7 @@ export async function inviteAction(form: FormData) {
 
 export async function endAccessAction(form: FormData) {
   const op = await operatorWithStepUp(form);
+  if (op.bootstrapRequestId) back({ error: "first_operator" });
   const address = email.safeParse(form.get("email"));
   const what = form.get("what");
   if (!address.success || (what !== "reset" && what !== "sign-out")) back({ error: "invalid" });

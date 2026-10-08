@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { accountStatus, getLoginSession, nextQuery, safeNext } from "@/lib/auth/login";
+import { getOperator } from "@/lib/auth/operator";
 import { checkAccessAction, signOutAction } from "../identity-actions";
 import { AuthCard, SubmitButton } from "../auth-card";
 import { Hidden, SecondaryButton } from "../flow-ui";
@@ -49,8 +50,17 @@ export default async function AccessPage({
             intro: `${session.user.email} is signed in, but it has no 10XiD account and no open invitation. If you were invited under another address, sign out and use that one.`,
           };
 
+  // The first operator confirms their own sign-in (lib/auth/operator.ts).
+  const firstOperator = status === "pending_binding" && (await getOperator())?.bootstrapRequestId;
+
   return (
     <AuthCard title={copy.title} intro={copy.intro}>
+      {firstOperator ? (
+        <a href="/auth/operator"
+          className="mb-3 block rounded-lg bg-brand-surface px-4 py-2.5 text-center text-sm font-semibold text-brand-on-surface hover:bg-brand-surface-hover">
+          You are the operator: confirm this sign-in
+        </a>
+      ) : null}
       <form action={checkAccessAction}>
         <Hidden name="next" value={next} />
         <SubmitButton>{status === "bound" ? "Continue" : "Check again"}</SubmitButton>

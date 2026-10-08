@@ -3,7 +3,13 @@ import { and, eq } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { authDb } from "@/lib/db/auth-connection";
 import { authSessions, authTwoFactors, authUsers } from "@/lib/db/schema";
-import { revokePortalSessionsForUser, userByAuthUserId, normalizeEmail } from "@/lib/db/accounts";
+import {
+  boundAccountAmong,
+  normalizeEmail,
+  openBindingForAuthUser,
+  revokePortalSessionsForUser,
+  userByAuthUserId,
+} from "@/lib/db/accounts";
 import { getLoginSession, type LoginIdentity } from "./login";
 
 /**
@@ -19,6 +25,16 @@ import { getLoginSession, type LoginIdentity } from "./login";
  * What an operator does goes through the database's operator_* functions
  * (0023), callable only by this service's sign-in role, plus the sign-in
  * tables this service already owns. Every action is logged with who did it.
+ *
+ * THE FIRST OPERATOR. Confirming a binding needs an operator, and an operator
+ * needs a bound account — so the first one could never get in. Until any
+ * operator's account is bound, a listed address may do exactly one thing
+ * here: confirm its OWN open binding request. Its sign-in must have passed
+ * the authenticator, be for exactly the address the request names (which the
+ * sign-in proved by emailed code or a verified provider address), and the
+ * action still needs a fresh code. The trust anchor is the same as for every
+ * operator — OPERATOR_EMAILS, set by whoever controls the login service — and
+ * the door shuts by itself the moment one operator is bound.
  */
 
 export const OPERATOR_FRESH_SECONDS = 5 * 60;
@@ -37,17 +53,32 @@ export type Operator = {
   accountId: string;
   email: string;
   name: string;
+  /**
+   * Set only for the first operator (see above): the one binding request they
+   * may confirm, their own. Everything else on the screen is refused.
+   */
+  bootstrapRequestId: string | null;
 };
 
 /** The operator making this request, or null for anybody else. */
 export async function getOperator(): Promise<Operator | null> {
   const session = await getLoginSession();
   if (!session?.mfaVerifiedAt) return null;
+  const listed = operatorEmails();
   const account = await userByAuthUserId(session.user.id);
-  if (!account) return null;
-  const email = normalizeEmail(account.email);
-  if (!operatorEmails().has(email)) return null;
-  return { session, accountId: account.id, email, name: account.fullName || email };
+  if (account) {
+    const email = normalizeEmail(account.email);
+    if (!listed.has(email)) return null;
+    return { session, accountId: account.id, email, name: account.fullName || email, bootstrapRequestId: null };
+  }
+
+  // The first operator: not bound yet, so only their own binding request.
+  const email = normalizeEmail(session.user.email);
+  if (!session.user.emailVerified || !listed.has(email)) return null;
+  if (await boundAccountAmong([...listed])) return null;
+  const request = await openBindingForAuthUser(session.user.id);
+  if (!request || normalizeEmail(request.email) !== email) return null;
+  return { session, accountId: request.userId, email, name: email, bootstrapRequestId: request.id };
 }
 
 export function isFresh(op: Operator, now = Date.now()): boolean {

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db, inAuthenticationTransaction } from "./connection";
 import { identityBindings, invitations, sessions, users } from "./schema";
 import { findUserByEmail } from "./identity";
@@ -32,6 +32,24 @@ export async function userByAuthUserId(authUserId: string) {
     )
     .limit(1);
   return rows[0] ?? null;
+}
+
+/** Whether any of these addresses belongs to a live account already bound to a sign-in. */
+export async function boundAccountAmong(emails: string[]): Promise<boolean> {
+  if (emails.length === 0) return false;
+  const rows = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      and(
+        inArray(users.email, emails.map(normalizeEmail)),
+        isNotNull(users.authUserId),
+        isNull(users.deletedAt),
+        eq(users.isService, false),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
 }
 
 /** The binding request still waiting for an operator, for this identity. */

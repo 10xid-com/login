@@ -35,6 +35,7 @@ const ERRORS: Record<string, string> = {
   already_bound: "That account is already bound to another sign-in.",
   address_not_owned: "That address no longer belongs to the account.",
   identity_taken: "That sign-in is already bound to another account.",
+  first_operator: "Until your own account is confirmed, you can only confirm your own sign-in.",
 };
 
 /** The authenticator code each action carries, unless one was entered in the last five minutes. */
@@ -61,7 +62,10 @@ export default async function OperatorPage({
   const op = await getOperator();
   if (!op) notFound();
   const params = await searchParams;
-  const [requests, businesses] = await Promise.all([openBindings(), clientBusinesses()]);
+  const first = op.bootstrapRequestId;
+  const [allRequests, businesses] = await Promise.all([openBindings(), first ? [] : clientBusinesses()]);
+  // The first operator sees their own request and nothing else (lib/auth/operator.ts).
+  const requests = first ? allRequests.filter((r) => r.id === first) : allRequests;
   const needsCode = !isFresh(op);
   const notice = params.notice ? NOTICES[params.notice]?.(params.who) : null;
   const error = params.error ? (ERRORS[params.error] ?? "That did not work.") : null;
@@ -83,6 +87,13 @@ export default async function OperatorPage({
           <TextLink href="/auth/account">Your sign-in</TextLink>
         </header>
 
+        {first ? (
+          <Notice>
+            No operator account is confirmed yet, so you can confirm your own sign-in here: it is for{" "}
+            {op.email}, which is on the operator list. After that this screen works as usual, and this
+            shortcut closes for good.
+          </Notice>
+        ) : null}
         {notice ? <Notice>{notice}</Notice> : null}
         {error ? <FieldError>{error}</FieldError> : null}
 
@@ -112,10 +123,12 @@ export default async function OperatorPage({
                       className="rounded-lg bg-brand-surface px-3 py-2 text-sm font-semibold text-brand-on-surface hover:bg-brand-surface-hover">
                       Confirm
                     </button>
-                    <button name="decision" value="reject" type="submit"
-                      className="rounded-lg border border-line px-3 py-2 text-sm font-semibold text-ink hover:bg-sunk">
-                      Reject
-                    </button>
+                    {first ? null : (
+                      <button name="decision" value="reject" type="submit"
+                        className="rounded-lg border border-line px-3 py-2 text-sm font-semibold text-ink hover:bg-sunk">
+                        Reject
+                      </button>
+                    )}
                   </form>
                 </li>
               ))}
@@ -123,6 +136,8 @@ export default async function OperatorPage({
           )}
         </section>
 
+        {first ? null : (
+          <>
         <section className="rounded-2xl border border-line bg-surface p-6 shadow-card">
           <h2 className="text-sm font-semibold text-ink">Invite somebody</h2>
           <form action={inviteAction} className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -152,7 +167,7 @@ export default async function OperatorPage({
             </div>
           </form>
           <p className="mt-2 text-xs text-ink-faint">
-            Lasts seven days. Only owners have permissions until the permission matrix is written. No email is sent
+            Lasts seven days. What they can do depends on the role. No email is sent
             from here: tell them to create their sign-in at login.10xid.com/auth/sign-up with this exact address.
           </p>
         </section>
@@ -181,6 +196,8 @@ export default async function OperatorPage({
             next sign-in, which needs an emailed code.
           </p>
         </section>
+          </>
+        )}
       </div>
     </main>
   );
