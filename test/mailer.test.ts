@@ -19,8 +19,19 @@ describe("code emails", () => {
     const { subject, text } = message("sign-in");
     expect(subject).toBe("386254 is your 10XiD sign-in code");
     expect(text).toContain(
-      "Enter it here: https://login.10xid.com/auth/sign-in/code?email=Samay%2Btest%40TBoxStudio.com",
+      "Enter it on this device: https://login.10xid.com/auth/sign-in/code?email=Samay%2Btest%40TBoxStudio.com",
     );
+  });
+
+  test("it says to type the code on the device that asked for it, and that a different code comes next", () => {
+    const { text, html } = message("sign-in");
+    expect(text).toContain("Asked for this code on a different device? Type the code there instead.");
+    expect(text).toContain("asked for the code from your authenticator app. That is a different code");
+    expect(html).toContain(">Enter your code on this device</a>");
+    expect(html).toContain("Asked for this code on a different device? Type the code there instead.");
+    // A reset code says where to type it too, but nothing about an authenticator step.
+    expect(message("forget-password").text).toContain("Type the code there instead.");
+    expect(message("forget-password").text).not.toContain("authenticator");
   });
 
   test("a reset code links to the reset page", () => {
