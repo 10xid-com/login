@@ -64,7 +64,9 @@ export function codeMessage(input: {
     text: [
       `${OPENING[input.purpose]} ${input.code}.`,
       ``,
-      `Enter it here: ${link}`,
+      `Enter it on this device: ${link}`,
+      ``,
+      OTHER_DEVICE,
       ``,
       `It expires in ${input.expiresInMinutes} minutes and can be used once.`,
       ...(input.purpose === "sign-in" ? [``, NEXT_STEP] : []),
@@ -73,6 +75,13 @@ export function codeMessage(input: {
     ].join("\n"),
   };
 }
+
+/**
+ * Said in every code email. The button opens wherever the email is read, so a
+ * code asked for on a computer and opened on a phone signs in the phone, and
+ * the computer's own code page then finds it spent.
+ */
+const OTHER_DEVICE = "Asked for this code on a different device? Type the code there instead.";
 
 /** Said in every sign-in email, because phones offer this code again on the next screen. */
 const NEXT_STEP =
@@ -93,8 +102,9 @@ function codeHtml(input: { code: string; purpose: CodePurpose; expiresInMinutes:
       <tr><td style="padding:0 28px;font-size:15px;line-height:1.5">${escapeHtml(OPENING[input.purpose])}</td></tr>
       <tr><td style="padding:12px 28px 4px;font-size:32px;font-weight:700;letter-spacing:.18em;font-family:ui-monospace,Menlo,Consolas,monospace">${code}</td></tr>
       <tr><td style="padding:16px 28px">
-        <a href="${link}" style="display:inline-block;background:#244a80;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 20px;border-radius:8px">Enter your code</a>
+        <a href="${link}" style="display:inline-block;background:#244a80;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 20px;border-radius:8px">Enter your code on this device</a>
       </td></tr>
+      <tr><td style="padding:0 28px 8px;font-size:13px;line-height:1.5;color:#5b625e">${escapeHtml(OTHER_DEVICE)}</td></tr>
       <tr><td style="padding:0 28px 8px;font-size:13px;line-height:1.5;color:#5b625e">It expires in ${input.expiresInMinutes} minutes and can be used once.</td></tr>${
         input.purpose === "sign-in"
           ? `
