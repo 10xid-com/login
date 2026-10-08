@@ -51,13 +51,16 @@ export default async function MfaSetupPage({
       <p className="mt-1 text-center font-mono text-sm break-all text-ink">{manual}</p>
       <form action={confirmEnrollmentAction} className="mt-6">
         <Hidden name="next" value={next} />
-        <label htmlFor="code" className={labelClass}>Code</label>
-        <input id="code" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}"
+        <label htmlFor="code" className={labelClass}>Code from your authenticator app</label>
+        {/* Not autocomplete="one-time-code": that has phones offer the code from the email. */}
+        <input id="code" name="code" inputMode="numeric" autoComplete="off" pattern="\d{6}"
           maxLength={6} required className={inputClass} />
         {params.error ? (
           <FieldError>
             {params.error === "code"
               ? "That code is not right. Use the current code from your app."
+              : params.error === "emailed"
+                ? "That is the code from your email. It already signed you in. This step needs the six-digit code from your authenticator app, which changes every 30 seconds."
               : params.error === "rate"
                 ? "Too many attempts. Wait a few minutes and try again."
                 : "That did not work. Start again."}

@@ -42,7 +42,7 @@ const ERRORS: Record<string, string> = {
 function Code({ show }: { show: boolean }) {
   if (!show) return null;
   return (
-    <input name="code" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" maxLength={6} required
+    <input name="code" inputMode="numeric" autoComplete="off" pattern="\d{6}" maxLength={6} required
       placeholder="Authenticator code" aria-label="Authenticator code"
       className={`${inputClass} w-40`} />
   );
