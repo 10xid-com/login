@@ -44,6 +44,8 @@ const MUST_BE_PROTECTED = [
   "engine_mode_policies",
   // Which client a repository belongs to. The link IS the authorisation.
   "repositories",
+  // Grant decisions and what agency people do: one business's record.
+  "audit_events",
 ];
 
 /** Read before a scope exists. Each entry needs a reason that survives review. */
@@ -61,6 +63,10 @@ const EXEMPT: Record<string, string> = {
   sessions:
     "Holds active_organization_id as part of the scope itself. Sessions are " +
     "found by token hash, never enumerated.",
+  agency_grants:
+    "Read to work out which client businesses an agency person may open. " +
+    "Like memberships, it PRODUCES the scope, so it cannot require one. Its " +
+    "rules (who may ask, approve, widen or end) are 0025's triggers.",
   connections:
     "Holds rows with a NULL organization_id — two people who scanned each " +
     "other's iD know each other personally, and that belongs to no company. " +

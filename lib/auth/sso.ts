@@ -67,6 +67,16 @@ export function afterSignIn(path: string): string {
   return `${originFor(PORTAL_HOST)}${path}`;
 }
 
+/**
+ * A portal page to go back to after confirming the authenticator again
+ * (/auth/mfa/again). A path only — the portal's own host is added by
+ * afterSignIn() — and never the sign-in plumbing under /auth/.
+ */
+export function portalReturnPath(input: unknown): string {
+  const path = safePath(input);
+  return path.startsWith("/auth/") ? "/" : path;
+}
+
 export function hashTicket(token: string): Buffer {
   return createHash("sha256").update(token, "utf8").digest();
 }

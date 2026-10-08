@@ -468,6 +468,43 @@ test("signed in longer than ten minutes: the account page lists devices, and sig
   await expect(page).toHaveURL(/notice=signed-out-everywhere/);
 });
 
+test("confirm it is you: a fresh code refreshes the sign-in, then back to the portal page", async ({ page }) => {
+  const email = await invite("again");
+  await page.goto(`${LOGIN}/auth/sign-in/code`);
+  await page.getByLabel("Email").fill(email);
+  await page.getByRole("button", { name: "Email me a code" }).click();
+  await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
+  await page.getByRole("button", { name: "Continue" }).click();
+  const { secret } = await enrolFromPage(page);
+  await page.getByRole("button", { name: /saved them/ }).click();
+
+  const verifiedAt = async () =>
+    (
+      await sql<{ at: Date }>(
+        "select mfa_verified_at as at from auth_sessions where user_id = (select id from auth_users where email = $1)",
+        [email],
+      )
+    )[0]!.at;
+  const before = await verifiedAt();
+
+  // A wrong code is refused and keeps the way back.
+  await page.goto(`${LOGIN}/auth/mfa/again?return=${encodeURIComponent("/team")}`);
+  await page.getByLabel("Code").fill("000000");
+  await page.getByRole("button", { name: "Confirm" }).click();
+  await expect(page).toHaveURL(/\/auth\/mfa\/again\?error=code&return=%2Fteam/);
+
+  await page.getByLabel("Code").fill(await freshCode(secret));
+  await page.getByRole("button", { name: "Confirm" }).click();
+  await expect(page).toHaveURL(`${APP}/team`);
+  expect((await verifiedAt()).getTime()).toBeGreaterThan(before.getTime());
+
+  // A return address off the portal is not followed.
+  await page.goto(`${LOGIN}/auth/mfa/again?return=${encodeURIComponent("https://evil.example/")}`);
+  await page.getByLabel("Code").fill(await freshCode(secret));
+  await page.getByRole("button", { name: "Confirm" }).click();
+  await expect(page).toHaveURL(new RegExp(`^${APP}/`));
+});
+
 test("operator screen: invite, then a code is asked for once five minutes have passed, then reset an authenticator", async ({ page, browser }) => {
   await signInAsOperator(page);
   await page.goto(`${LOGIN}/auth/operator`);

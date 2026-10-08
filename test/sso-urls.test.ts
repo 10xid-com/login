@@ -51,3 +51,17 @@ describe("afterSignIn", () => {
     expect(sso.afterSignIn("/jobs")).toBe("/jobs");
   });
 });
+
+describe("portalReturnPath (after /auth/mfa/again)", () => {
+  test("a portal page goes back to the portal, by full address", async () => {
+    const sso = await load({ primary: "login.10xid.com", portal: "app.10xid.com" });
+    expect(sso.afterSignIn(sso.portalReturnPath("/team?x=1"))).toBe("https://app.10xid.com/team?x=1");
+  });
+
+  test("anything that is not a plain portal path goes to the portal's front page", async () => {
+    const sso = await load({ primary: "login.10xid.com", portal: "app.10xid.com" });
+    for (const bad of ["https://evil.test/", "//evil.test", "/\\evil.test", "/auth/sso/authorize?x", "/auth/account", "", null, 42]) {
+      expect(sso.portalReturnPath(bad), String(bad)).toBe("/");
+    }
+  });
+});

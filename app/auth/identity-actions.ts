@@ -25,6 +25,7 @@ import { consumeTicketsForAuthSession } from "@/lib/db/identity";
 import { authDb } from "@/lib/db/auth-connection";
 import { authUsers } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { afterSignIn, portalReturnPath } from "@/lib/auth/sso";
 
 /**
  * Every step of signing in on login.10xid.com, as server actions.
@@ -238,6 +239,28 @@ export async function verifyAuthenticatorAction(form: FormData) {
     to("/auth/mfa", { error: "code", next });
   }
   await finish(next);
+}
+
+/**
+ * A fresh code for a sign-in that already passed the authenticator, for the
+ * portal's 24-hour and five-minute rules. Back to the portal page it came from.
+ */
+export async function reverifyAuthenticatorAction(form: FormData) {
+  await assertLoginOrigin();
+  const back = portalReturnPath(form.get("return"));
+  const again: (params: Record<string, string>) => never = (params) =>
+    to("/auth/mfa/again", { ...params, return: back });
+  const code = totp.safeParse(form.get("code"));
+  if (!code.success) again({ error: "code" });
+  const who = (await getLoginSession())?.user.id;
+  if (!(await allow("mfa", who))) again({ error: "rate" });
+  const result = await call((h) => getAuth().api.mfaVerify({ body: { code: code.data }, headers: h }));
+  if (!result.ok) {
+    if (result.code === "MFA_LOCKED") again({ error: "locked" });
+    if (result.code === "UNAUTHORIZED" || result.code === "401") to("/auth/sign-in", {});
+    again({ error: "code" });
+  }
+  redirect(afterSignIn(back));
 }
 
 export async function recoverWithCodeAction(form: FormData) {
