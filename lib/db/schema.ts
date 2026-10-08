@@ -1641,6 +1641,29 @@ export const repositories = pgTable("repositories", {
   unlinkedAt: timestamp("unlinked_at", { withTimezone: true }),
 });
 
+/**
+ * 0027: which website a business runs from the portal's Website channel. One
+ * live connection per address across every business, and one per business.
+ * No secret is stored: the portal signs its requests with its own key and the
+ * site checks them with the portal's public key.
+ */
+export const siteConnections = pgTable("site_connections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id),
+  channel: text("channel").notNull().default("website"),
+  /** An https origin: no path, no trailing slash. */
+  siteUrl: text("site_url").notNull(),
+  /** The repository it is built from, linked to the same business. */
+  repositoryId: uuid("repository_id"),
+  connectedBy: uuid("connected_by")
+    .notNull()
+    .references(() => users.id),
+  connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+  disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
+});
+
 /* ------------------------------------------------------------------ */
 /* Better Auth (0022)                                                  */
 /* ------------------------------------------------------------------ */
