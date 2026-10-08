@@ -145,6 +145,11 @@ export const organizations = pgTable("organizations", {
   createdAt,
   updatedAt,
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  /**
+   * An agency may be granted access to client businesses (0025). Set only by
+   * the database owner; the application roles cannot change it.
+   */
+  isAgency: boolean("is_agency").notNull().default(false),
 });
 
 /**
@@ -1782,4 +1787,81 @@ export const authRateLimits = pgTable("auth_rate_limits", {
   key: text("key").notNull().unique(),
   count: integer("count").notNull(),
   lastRequest: bigint("last_request", { mode: "number" }).notNull(),
+});
+
+/* ------------------------------------------------------------------ */
+/* Agency grants (0025)                                                */
+/* ------------------------------------------------------------------ */
+
+export const agencyGrantStatus = pgEnum("agency_grant_status", ["requested", "active", "declined", "revoked"]);
+export const agencyPersonStatus = pgEnum("agency_person_status", [
+  "requested",
+  "approved",
+  "declined",
+  "blocked",
+  "removed",
+]);
+
+/**
+ * An agency's access to one client business: asked for by the agency, decided
+ * by the client's owner, for one role (never owner), until a fixed date no more
+ * than a year after approval. Never a membership. The rules are 0025's
+ * triggers; this is only the shape.
+ */
+export const agencyGrants = pgTable("agency_grants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  clientOrganizationId: uuid("client_organization_id")
+    .notNull()
+    .references(() => organizations.id),
+  agencyOrganizationId: uuid("agency_organization_id")
+    .notNull()
+    .references(() => organizations.id),
+  role: membershipRole("role").notNull().default("editor"),
+  status: agencyGrantStatus("status").notNull().default("requested"),
+  reason: text("reason").notNull(),
+  durationDays: integer("duration_days").notNull().default(90),
+  requestedBy: uuid("requested_by")
+    .notNull()
+    .references(() => users.id),
+  requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+  decidedBy: uuid("decided_by").references(() => users.id),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  revokedBy: uuid("revoked_by").references(() => users.id),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+});
+
+/** A named agency person on a grant, approved (or not) by the client, one by one. */
+export const agencyGrantPeople = pgTable(
+  "agency_grant_people",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    grantId: uuid("grant_id")
+      .notNull()
+      .references(() => agencyGrants.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    status: agencyPersonStatus("status").notNull().default("requested"),
+    addedBy: uuid("added_by")
+      .notNull()
+      .references(() => users.id),
+    addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
+    decidedBy: uuid("decided_by").references(() => users.id),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("agency_grant_people_once").on(t.grantId, t.userId)],
+);
+
+/** Append-only record of grant decisions and of what agency people do (0025). */
+export const auditEvents = pgTable("audit_events", {
+  id: bigserial("id", { mode: "bigint" }).primaryKey(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id),
+  actorUserId: uuid("actor_user_id").references(() => users.id),
+  agencyGrantId: uuid("agency_grant_id").references(() => agencyGrants.id),
+  action: text("action").notNull(),
+  target: text("target"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

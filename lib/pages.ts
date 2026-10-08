@@ -156,6 +156,17 @@ export const PAGES: PageRecord[] = [
     group: "Getting in",
   },
   {
+    id: "login.mfa-again",
+    path: "/auth/mfa/again",
+    name: "Confirm it is you",
+    purpose:
+      "A fresh authenticator code for a sign-in that already has one: the portal asks for it before using agency access (24 hours) or deciding on it (five minutes).",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/mfa/again/page.tsx",
+    group: "Getting in",
+  },
+  {
     id: "login.mfa-setup",
     path: "/auth/mfa/setup",
     name: "Set up authenticator",
