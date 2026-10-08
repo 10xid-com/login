@@ -1,9 +1,9 @@
 import "server-only";
 import { headers } from "next/headers";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { symmetricDecrypt } from "better-auth/crypto";
 import { authDb } from "@/lib/db/auth-connection";
-import { authTwoFactors } from "@/lib/db/schema";
+import { authSessions, authTwoFactors } from "@/lib/db/schema";
 import { findUserByEmail } from "@/lib/db/identity";
 import { acceptInvitation, liveInvitationFor } from "@/lib/db/invitations";
 import {
@@ -172,4 +172,27 @@ export function safeNext(input: unknown): string {
 /** `?next=` for a link, empty when it is just "/". */
 export function nextQuery(next: string, prefix = "?"): string {
   return next === "/" ? "" : `${prefix}next=${encodeURIComponent(next)}`;
+}
+
+/**
+ * This identity's live sign-in sessions, newest first, read directly.
+ *
+ * Not through Better Auth's listSessions: that endpoint demands a session
+ * created within `freshAge` (ten minutes here, which is right for the
+ * sensitive actions that share the setting), so the account page and the
+ * sign-out buttons failed for anybody signed in longer than that. The table's
+ * row-level security already hides every session that is expired, idle 48
+ * hours, or past its seven days (0022), so what this returns is what is live.
+ */
+export async function ownSignInSessions(userId: string) {
+  return authDb()
+    .select({
+      id: authSessions.id,
+      token: authSessions.token,
+      userAgent: authSessions.userAgent,
+      createdAt: authSessions.createdAt,
+    })
+    .from(authSessions)
+    .where(eq(authSessions.userId, userId))
+    .orderBy(desc(authSessions.createdAt));
 }

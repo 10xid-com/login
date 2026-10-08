@@ -12,6 +12,7 @@ import {
   assertLoginOrigin,
   getLoginSession,
   nextQuery,
+  ownSignInSessions,
   resolveAccount,
   safeNext,
 } from "@/lib/auth/login";
@@ -363,8 +364,7 @@ export async function revokeSessionAction(form: FormData) {
   if (!current || !id.success) to("/auth/account", {});
   // The token is looked up here, by id, among the caller's own sessions: no
   // session token is ever put into a page.
-  const list = await call((h) => getAuth().api.listSessions({ headers: h }));
-  const target = list.ok ? list.value.find((s) => s.id === id.data) : undefined;
+  const target = (await ownSignInSessions(current.user.id)).find((s) => s.id === id.data);
   if (!target) to("/auth/account", { error: "failed" });
   await call((h) => getAuth().api.revokeSession({ body: { token: target.token }, headers: h }));
   await revokePortalSessionsFromAuthSession(target.id);
@@ -388,8 +388,7 @@ export async function signOutEverywhereAction() {
   await assertLoginOrigin();
   const current = await getLoginSession();
   if (!current) to("/auth/sign-in", {});
-  const list = await call((h) => getAuth().api.listSessions({ headers: h }));
-  for (const s of list.ok ? list.value : []) await consumeTicketsForAuthSession(s.id);
+  for (const s of await ownSignInSessions(current.user.id)) await consumeTicketsForAuthSession(s.id);
   const account = await userByAuthUserId(current.user.id);
   if (account) await revokePortalSessionsForUser(account.id);
   await call((h) => getAuth().api.revokeSessions({ headers: h }));
