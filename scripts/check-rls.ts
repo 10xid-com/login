@@ -44,6 +44,8 @@ const MUST_BE_PROTECTED = [
   "engine_mode_policies",
   // Which client a repository belongs to. The link IS the authorisation.
   "repositories",
+  // Which website a business publishes to. The connection IS the authorisation.
+  "site_connections",
   // Grant decisions and what agency people do: one business's record.
   "audit_events",
 ];
