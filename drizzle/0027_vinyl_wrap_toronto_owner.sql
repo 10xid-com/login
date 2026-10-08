@@ -1,4 +1,4 @@
--- 0026: Rana owns Vinyl Wrap Toronto.
+-- 0027: Rana owns Vinyl Wrap Toronto.
 --
 -- WHY. Vinyl Wrap Toronto (slug vinyl-wrap-toronto) was created by 0012 with
 -- three people — Joel, Imran and Rana — as `member`, which 0024 turned into
@@ -98,7 +98,7 @@ BEGIN
   -- On the business's own record. No actor: this is a decision applied by
   -- migration, not by a person in the portal.
   INSERT INTO audit_events (organization_id, actor_user_id, action, target)
-  VALUES (v_org_id, NULL, 'membership.role_changed', v_email || ': ' || v_role || ' -> owner (migration 0026)');
+  VALUES (v_org_id, NULL, 'membership.role_changed', v_email || ': ' || v_role || ' -> owner (migration 0027)');
 
   RAISE NOTICE '[vwt] CHANGED  % % -> owner', v_email, v_role;
 END

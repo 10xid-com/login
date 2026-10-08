@@ -1,4 +1,4 @@
--- 0027 — SITE CONNECTIONS: which website a business runs from the portal.
+-- 0028 — SITE CONNECTIONS: which website a business runs from the portal.
 --
 -- The Website channel (app.10xid.com/channels/website) lets a business edit
 -- and publish its own site: blog posts first, then pages. This table is the

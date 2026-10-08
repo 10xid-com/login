@@ -1642,7 +1642,7 @@ export const repositories = pgTable("repositories", {
 });
 
 /**
- * 0027: which website a business runs from the portal's Website channel. One
+ * 0028: which website a business runs from the portal's Website channel. One
  * live connection per address across every business, and one per business.
  * No secret is stored: the portal signs its requests with its own key and the
  * site checks them with the portal's public key.
@@ -1852,7 +1852,33 @@ export const agencyGrants = pgTable("agency_grants", {
   expiresAt: timestamp("expires_at", { withTimezone: true }),
   revokedBy: uuid("revoked_by").references(() => users.id),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  /** The grant this request renews, set by the database (0026). */
+  renewsGrantId: uuid("renews_grant_id").references((): AnyPgColumn => agencyGrants.id),
 });
+
+/**
+ * One reminder to one person about one grant (0026): claimed before it is
+ * sent, so it goes once however often the reminder run is started.
+ */
+export const agencyGrantReminders = pgTable(
+  "agency_grant_reminders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    grantId: uuid("grant_id")
+      .notNull()
+      .references(() => agencyGrants.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    kind: text("kind").notNull().default("expiry_7d"),
+    status: text("status").notNull().default("sending"),
+    attempts: integer("attempts").notNull().default(1),
+    lastError: text("last_error"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }).notNull().defaultNow(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("agency_grant_reminders_once").on(t.grantId, t.userId, t.kind)],
+);
 
 /** A named agency person on a grant, approved (or not) by the client, one by one. */
 export const agencyGrantPeople = pgTable(
