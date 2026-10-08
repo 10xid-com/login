@@ -67,11 +67,16 @@ export function codeMessage(input: {
       `Enter it here: ${link}`,
       ``,
       `It expires in ${input.expiresInMinutes} minutes and can be used once.`,
+      ...(input.purpose === "sign-in" ? [``, NEXT_STEP] : []),
       ``,
       `If you did not ask for this, you can ignore this message — the code is useless without access to this mailbox.`,
     ].join("\n"),
   };
 }
+
+/** Said in every sign-in email, because phones offer this code again on the next screen. */
+const NEXT_STEP =
+  "After this you will be asked for the code from your authenticator app. That is a different code: do not enter this one again.";
 
 const escapeHtml = (v: string) =>
   v.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -90,7 +95,12 @@ function codeHtml(input: { code: string; purpose: CodePurpose; expiresInMinutes:
       <tr><td style="padding:16px 28px">
         <a href="${link}" style="display:inline-block;background:#244a80;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 20px;border-radius:8px">Enter your code</a>
       </td></tr>
-      <tr><td style="padding:0 28px 8px;font-size:13px;line-height:1.5;color:#5b625e">It expires in ${input.expiresInMinutes} minutes and can be used once.</td></tr>
+      <tr><td style="padding:0 28px 8px;font-size:13px;line-height:1.5;color:#5b625e">It expires in ${input.expiresInMinutes} minutes and can be used once.</td></tr>${
+        input.purpose === "sign-in"
+          ? `
+      <tr><td style="padding:0 28px 8px;font-size:13px;line-height:1.5;color:#5b625e">${escapeHtml(NEXT_STEP)}</td></tr>`
+          : ""
+      }
       <tr><td style="padding:0 28px 28px;font-size:13px;line-height:1.5;color:#5b625e">If you did not ask for this, you can ignore this message — the code is useless without access to this mailbox.</td></tr>
     </table>
   </td></tr></table>

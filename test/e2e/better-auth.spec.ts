@@ -240,9 +240,16 @@ test("emailed code: still the authenticator, and a used code is not accepted twi
   await page.goto(`${LOGIN}/auth/sign-in/code`);
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: "Email me a code" }).click();
-  await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
+  const emailed = await codeFor(email, "sign-in");
+  await page.getByLabel("Code").fill(emailed);
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page).toHaveURL(/\/auth\/mfa(\?|$)/);
+  // Phones offer the emailed code again here: the field doesn't ask for it,
+  // and typing it gets told what it is (not "not right", and not counted).
+  await expect(page.getByLabel("Code")).toHaveAttribute("autocomplete", "off");
+  await page.getByLabel("Code").fill(emailed);
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(page.getByRole("alert")).toContainText("That is the code from your email");
   await page.getByLabel("Code").fill(used);
   await page.getByRole("button", { name: "Verify" }).click();
   await expect(page.getByRole("alert")).toContainText("not right");

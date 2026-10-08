@@ -8,6 +8,7 @@ import { configuredProviders, getAuth, type SocialProvider } from "@/lib/auth/au
 import { forgetRecoveryCodes, showRecoveryCodesOnce } from "@/lib/auth/recovery-codes-once";
 import { allow } from "@/lib/auth/throttle";
 import { rememberResume } from "@/lib/auth/resume";
+import { isSpentCode, rememberSpentCode } from "@/lib/auth/spent-code";
 import {
   assertLoginOrigin,
   getLoginSession,
@@ -126,6 +127,7 @@ export async function signInWithCodeAction(form: FormData) {
     // NOT_INVITED lands here too, worded the same as a wrong code.
     to("/auth/sign-in/code", { email: address.data, error: "code", next });
   }
+  await rememberSpentCode(code.data);
   to("/auth/mfa", { next });
 }
 
@@ -213,6 +215,7 @@ export async function confirmEnrollmentAction(form: FormData) {
   const next = safeNext(form.get("next"));
   const code = totp.safeParse(form.get("code"));
   if (!code.success) to("/auth/mfa/setup", { error: "code", next });
+  if (await isSpentCode(code.data)) to("/auth/mfa/setup", { error: "emailed", next });
   const who = (await getLoginSession())?.user.id;
   if (!(await allow("mfa", who))) to("/auth/mfa/setup", { error: "rate", next });
   const result = await call((h) =>
@@ -229,6 +232,9 @@ export async function verifyAuthenticatorAction(form: FormData) {
   const next = safeNext(form.get("next"));
   const code = totp.safeParse(form.get("code"));
   if (!code.success) to("/auth/mfa", { error: "code", next });
+  // The emailed code, offered again by the phone: say so, and don't count it
+  // against the authenticator's lockout.
+  if (await isSpentCode(code.data)) to("/auth/mfa", { error: "emailed", next });
   const who = (await getLoginSession())?.user.id;
   if (!(await allow("mfa", who))) to("/auth/mfa", { error: "rate", next });
   const result = await call((h) => getAuth().api.mfaVerify({ body: { code: code.data }, headers: h }));

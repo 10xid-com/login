@@ -10,6 +10,7 @@ export const metadata: Metadata = { title: "Authenticator code" };
 const ERRORS: Record<string, string> = {
   rate: "Too many attempts. Wait a few minutes and try again.",
   code: "That code is not right. Use the current code from your authenticator app.",
+  emailed: "That is the code from your email. It already signed you in. This step needs the six-digit code from your authenticator app, which changes every 30 seconds.",
   locked: "Too many incorrect codes. Try again in 15 minutes, or use a recovery code.",
 };
 
@@ -34,7 +35,7 @@ export default async function MfaPage({
   const error = params.error ? ERRORS[params.error] : null;
   return (
     <AuthCard title="Enter your authenticator code"
-      intro={`Signed in as ${session.user.email}. Open your authenticator app and enter the six-digit code for 10XiD.`}
+      intro={`Signed in as ${session.user.email}. Now open your authenticator app and enter the six-digit code it shows for 10XiD. It is not the code from your email.`}
       footer={
         <>
           Lost your phone? <TextLink href={`/auth/mfa/recover${nextQuery(next)}`}>Use a recovery code</TextLink>
@@ -42,8 +43,9 @@ export default async function MfaPage({
       }>
       <form action={verifyAuthenticatorAction}>
         <Hidden name="next" value={next} />
-        <label htmlFor="code" className={labelClass}>Code</label>
-        <input id="code" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}"
+        <label htmlFor="code" className={labelClass}>Code from your authenticator app</label>
+        {/* Not autocomplete="one-time-code": that has phones offer the code from the email. */}
+        <input id="code" name="code" inputMode="numeric" autoComplete="off" pattern="\d{6}"
           maxLength={6} required autoFocus className={inputClass} />
         {error ? <FieldError>{error}</FieldError> : null}
         <SubmitButton>Verify</SubmitButton>

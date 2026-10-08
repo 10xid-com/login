@@ -43,7 +43,7 @@ export default async function MfaAgainPage({
       <form action={reverifyAuthenticatorAction}>
         <Hidden name="return" value={back} />
         <label htmlFor="code" className={labelClass}>Code</label>
-        <input id="code" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}"
+        <input id="code" name="code" inputMode="numeric" autoComplete="off" pattern="\d{6}"
           maxLength={6} required autoFocus className={inputClass} />
         {error ? <FieldError>{error}</FieldError> : null}
         <SubmitButton>Confirm</SubmitButton>
