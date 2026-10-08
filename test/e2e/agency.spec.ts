@@ -194,8 +194,10 @@ test("agency access: ask, approve, open, block, time limits, audit, revoke, expi
     await shot(p, "4-banner-in-client");
     // Work: a job, filed into the client's business.
     await p.goto(`${APP}/jobs`);
-    await p.getByLabel("Job title").fill(`Brochure ${TAG}`);
-    await p.getByRole("button", { name: "Send" }).click();
+    // The page's own form: Chat Boss's panel has a "Send" of its own.
+    const page = p.getByRole("main");
+    await page.getByLabel("Job title").fill(`Brochure ${TAG}`);
+    await page.getByRole("button", { name: "Send" }).click();
     await expect(p.getByText(`Brochure ${TAG}`)).toBeVisible();
     const [job] = await sql<{ organization_id: string }>("select organization_id from jobs where title = $1", [`Brochure ${TAG}`]);
     expect(job?.organization_id).toBe(client!.id);
@@ -317,6 +319,26 @@ test("agency access: ask, approve, open, block, time limits, audit, revoke, expi
 
     await worker.page.goto(`${APP}/business`);
     await expect(businessRow(worker.page, clientName)).toContainText(`via ${agencyName}`);
+
+    // Renewal opens in the last seven days, as a new request the owner decides on.
+    const [live] = await sql<{ id: string }>(
+      "select id from agency_grants where client_organization_id = $1 and status = 'active' and expires_at > now()",
+      [client!.id],
+    );
+    await boss.page.goto(`${APP}/agency`);
+    await expect(boss.page.getByRole("button", { name: "Ask to renew" })).toHaveCount(0);
+    await sql("update agency_grants set expires_at = now() + interval '3 days' where id = $1", [live!.id]);
+    await boss.page.goto(`${APP}/agency`);
+    await boss.page.getByRole("button", { name: "Ask to renew" }).click();
+    await expect(boss.page.getByRole("status")).toContainText("Asked to renew");
+    await expect(boss.page.getByText(`${clientName} · Editor · renewal, waiting for the business`)).toBeVisible();
+    await expect(boss.page.getByRole("button", { name: "Ask to renew" })).toHaveCount(0);
+
+    // The link in the reminder email lands the owner on the grant.
+    await owner.page.goto(`${APP}/grants/${live!.id}`);
+    await expect(owner.page).toHaveURL(`${APP}/team#grant-${live!.id}`);
+    await expect(owner.page.getByText(`${agencyName} asks to renew its Editor access`)).toBeVisible();
+    await shot(owner.page, "7-renewal-on-team");
 
     await sql(
       "update agency_grants set expires_at = now() - interval '1 second' where client_organization_id = $1 and status = 'active'",
