@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { configuredProviders, getAuth } from "@/lib/auth/auth";
-import { authenticatorState, getLoginSession } from "@/lib/auth/login";
+import { authenticatorState, getLoginSession, ownSignInSessions } from "@/lib/auth/login";
 import { getOperator } from "@/lib/auth/operator";
 import {
   setPasswordAction,
@@ -45,7 +45,7 @@ export default async function AccountPage({
 
   const h = await headers();
   const [sessions, accounts, factor, operator] = await Promise.all([
-    getAuth().api.listSessions({ headers: h }),
+    ownSignInSessions(session.user.id),
     getAuth().api.listUserAccounts({ headers: h }),
     authenticatorState(session.user.id),
     getOperator(),

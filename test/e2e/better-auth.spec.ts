@@ -410,6 +410,64 @@ test("a recovery code stands in for a lost phone; signing out everywhere ends th
   await expect(page).toHaveURL(new RegExp(`^${LOGIN}/auth/sign-in`));
 });
 
+test("signed in longer than ten minutes: the account page lists devices, and signing them out works", async ({ page, browser }) => {
+  // Better Auth's own session list demands a sign-in under ten minutes old
+  // (freshAge); the page and the sign-out buttons used it, and failed for
+  // everybody after that. Age this person's sign-ins past it and go again.
+  const email = await invite("aged");
+  await page.goto(`${LOGIN}/auth/sign-in/code`);
+  await page.getByLabel("Email").fill(email);
+  await page.getByRole("button", { name: "Email me a code" }).click();
+  await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
+  await page.getByRole("button", { name: "Continue" }).click();
+  const { secret } = await enrolFromPage(page);
+  await page.getByRole("button", { name: /saved them/ }).click();
+
+  const other = await browser.newContext();
+  const second = await other.newPage();
+  await second.goto(`${LOGIN}/auth/sign-in/code`);
+  await second.getByLabel("Email").fill(email);
+  await second.getByRole("button", { name: "Email me a code" }).click();
+  await second.getByLabel("Code").fill(await codeFor(email, "sign-in"));
+  await second.getByRole("button", { name: "Continue" }).click();
+  await second.getByLabel("Code").fill(await freshCode(secret));
+  await second.getByRole("button", { name: "Verify" }).click();
+  await expect(second).not.toHaveURL(/\/auth\/mfa/);
+
+  // created_at is immutable to the application (0022); the fixture steps
+  // around the trigger as the table owner.
+  const db = new Client({ connectionString: process.env.DATABASE_URL });
+  await db.connect();
+  try {
+    await db.query("begin");
+    await db.query("set local session_replication_role = replica");
+    await db.query(
+      `update auth_sessions set created_at = now() - interval '30 minutes'
+        where user_id = (select id from auth_users where email = $1)`,
+      [email],
+    );
+    await db.query("commit");
+  } finally {
+    await db.end();
+  }
+
+  await page.goto(`${LOGIN}/auth/account`);
+  await expect(page.getByRole("heading", { name: "Your sign-in" })).toBeVisible();
+  await expect(page.getByRole("listitem").filter({ hasText: "Since" })).toHaveCount(2);
+
+  // Sign out the other device.
+  await page.getByRole("listitem").filter({ hasNotText: "this device" }).getByRole("button", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/notice=revoked/);
+  await expect(page.getByRole("listitem").filter({ hasText: "Since" })).toHaveCount(1);
+  await second.goto(`${LOGIN}/auth/account`);
+  await expect(second).toHaveURL(/\/auth\/sign-in/);
+  await other.close();
+
+  // And every device, this one included.
+  await page.getByRole("button", { name: "Sign out on every device" }).click();
+  await expect(page).toHaveURL(/notice=signed-out-everywhere/);
+});
+
 test("operator screen: invite, then a code is asked for once five minutes have passed, then reset an authenticator", async ({ page, browser }) => {
   await signInAsOperator(page);
   await page.goto(`${LOGIN}/auth/operator`);
