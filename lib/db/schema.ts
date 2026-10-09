@@ -1705,19 +1705,20 @@ export const siteConnections = pgTable("site_connections", {
 });
 
 /**
- * A business's Instagram account (0034). The access token is encrypted by the
- * app before it is stored, and erased on disconnect.
+ * A business's Instagram account (0034) or Facebook Page (0036). The access
+ * token is encrypted by the app before it is stored, and erased on disconnect.
  */
 export const socialConnections = pgTable("social_connections", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id")
     .notNull()
     .references(() => organizations.id),
-  channel: text("channel").notNull(),
-  /** The Instagram professional account id: what posts are made to. */
+  channel: text("channel").$type<"instagram" | "facebook">().notNull(),
+  /** What posts are made to: the Instagram professional account id, or the Page id. */
   accountId: text("account_id").notNull(),
-  /** The app-scoped id Instagram's sign-in and its notices use. */
+  /** The app-scoped id the sign-in and Meta's notices use. */
   scopedId: text("scoped_id").notNull(),
+  /** The Instagram username, or the Page's name. */
   username: text("username").notNull(),
   tokenCiphertext: text("token_ciphertext"),
   tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
