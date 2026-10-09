@@ -1704,6 +1704,58 @@ export const siteConnections = pgTable("site_connections", {
   disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
 });
 
+/** Raw bytes, for a photo waiting to be posted. */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "bytea",
+});
+
+/**
+ * A business's Instagram account (0034). The access token is encrypted by the
+ * app before it is stored, and erased on disconnect.
+ */
+export const socialConnections = pgTable("social_connections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id),
+  channel: text("channel").notNull(),
+  /** The Instagram professional account id: what posts are made to. */
+  accountId: text("account_id").notNull(),
+  /** The app-scoped id Instagram's sign-in and its notices use. */
+  scopedId: text("scoped_id").notNull(),
+  username: text("username").notNull(),
+  tokenCiphertext: text("token_ciphertext"),
+  tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+  tokenRefreshedAt: timestamp("token_refreshed_at", { withTimezone: true }).notNull().defaultNow(),
+  scopes: text("scopes").array().notNull().default(sql`'{}'::text[]`),
+  connectedBy: uuid("connected_by")
+    .notNull()
+    .references(() => users.id),
+  connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
+  disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
+});
+
+/** A JPEG waiting for Instagram to fetch it (0034): 24 hours at most. */
+export const socialMedia = pgTable("social_media", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id),
+  uploadedBy: uuid("uploaded_by")
+    .notNull()
+    .references(() => users.id),
+  /** sha-256 (hex) of the random token in the photo's public address. */
+  tokenHash: text("token_hash").notNull().unique(),
+  contentType: text("content_type").notNull(),
+  bytes: bytea("bytes").notNull(),
+  width: integer("width").notNull(),
+  height: integer("height").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true })
+    .notNull()
+    .default(sql`now() + interval '24 hours'`),
+});
+
 /* ------------------------------------------------------------------ */
 /* Better Auth (0022)                                                  */
 /* ------------------------------------------------------------------ */
