@@ -1731,11 +1731,11 @@ export const socialConnections = pgTable("social_connections", {
 });
 
 /**
- * A photo or video waiting for a channel to fetch it (0034): the file is in
+ * A photo or video waiting for a channel to fetch it (0035): the file is in
  * the app's object store under `storageKey`; this says whose it is. 24 hours
  * at most.
  */
-export const socialMedia = pgTable("social_media", {
+export const socialMedia = pgTable("social_media_uploads", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id")
     .notNull()
