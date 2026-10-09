@@ -47,6 +47,9 @@ const MUST_BE_PROTECTED = [
   "repositories",
   // Which website a business publishes to. The connection IS the authorisation.
   "site_connections",
+  // A business's Instagram account and the photos it is about to post.
+  "social_connections",
+  "social_media",
   // Grant decisions and what agency people do: one business's record.
   "audit_events",
 ];

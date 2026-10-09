@@ -239,6 +239,13 @@
       "when": 1790001700000,
       "tag": "0033_job_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790001800000,
+      "tag": "0034_social_connections",
+      "breakpoints": true
     }
   ]
 }
