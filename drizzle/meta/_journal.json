@@ -204,6 +204,13 @@
       "when": 1790001200000,
       "tag": "0028_site_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790001300000,
+      "tag": "0029_paolo_owns_vinyl_wrap_toronto",
+      "breakpoints": true
     }
   ]
 }
