@@ -50,6 +50,7 @@ const MUST_BE_PROTECTED = [
   // A business's Instagram account and the photos it is about to post.
   "social_connections",
   "social_media",
+  "social_media_uploads",
   // Grant decisions and what agency people do: one business's record.
   "audit_events",
 ];
