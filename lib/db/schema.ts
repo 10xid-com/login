@@ -1704,11 +1704,6 @@ export const siteConnections = pgTable("site_connections", {
   disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
 });
 
-/** Raw bytes, for a photo waiting to be posted. */
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({
-  dataType: () => "bytea",
-});
-
 /**
  * A business's Instagram account (0034). The access token is encrypted by the
  * app before it is stored, and erased on disconnect.
@@ -1735,7 +1730,11 @@ export const socialConnections = pgTable("social_connections", {
   disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
 });
 
-/** A JPEG waiting for Instagram to fetch it (0034): 24 hours at most. */
+/**
+ * A photo or video waiting for a channel to fetch it (0034): the file is in
+ * the app's object store under `storageKey`; this says whose it is. 24 hours
+ * at most.
+ */
 export const socialMedia = pgTable("social_media", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id")
@@ -1744,12 +1743,16 @@ export const socialMedia = pgTable("social_media", {
   uploadedBy: uuid("uploaded_by")
     .notNull()
     .references(() => users.id),
-  /** sha-256 (hex) of the random token in the photo's public address. */
-  tokenHash: text("token_hash").notNull().unique(),
+  kind: text("kind").$type<"photo" | "video">().notNull(),
   contentType: text("content_type").notNull(),
-  bytes: bytea("bytes").notNull(),
-  width: integer("width").notNull(),
-  height: integer("height").notNull(),
+  storageKey: text("storage_key").notNull().unique(),
+  byteSize: bigint("byte_size", { mode: "number" }).notNull(),
+  width: integer("width"),
+  height: integer("height"),
+  durationMs: integer("duration_ms"),
+  /** A video arriving in parts: the store's multipart upload id until it is whole. */
+  uploadId: text("upload_id"),
+  ready: boolean("ready").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp("expires_at", { withTimezone: true })
     .notNull()
