@@ -1015,6 +1015,39 @@ export const jobEvents = pgTable(
 );
 
 /**
+ * What the people of a business say to each other about a job (0031).
+ *
+ * Append-only, like `job_events`: the application role holds SELECT and
+ * INSERT and nothing else. `handedTo` is set on the note that went with a
+ * handover, and names the person the job was given to; the handover itself
+ * is a `job_events` row. A trigger fills `organizationId` from the job and
+ * refuses one that disagrees, and refuses a `handedTo` who is not a person
+ * of that business.
+ */
+export const jobNotes = pgTable(
+  "job_notes",
+  {
+    id: uuid("id").primaryKey(),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => jobs.id),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    authorId: uuid("author_id")
+      .notNull()
+      .references(() => users.id),
+    /** Email can change later; the record of who wrote it must not. */
+    authorEmailAtTime: text("author_email_at_time").notNull(),
+    body: text("body").notNull(),
+    handedTo: uuid("handed_to").references(() => users.id),
+    /** The server's clock, never the client's. */
+    createdAt,
+  },
+  (t) => [index("job_notes_job_idx").on(t.jobId, t.createdAt)],
+);
+
+/**
  * Every table that belongs to a client carries `organization_id` directly —
  * deliberately denormalised — so the scoping helper and the database policies
  * apply one identical filter to every table with no joins.
@@ -1022,6 +1055,7 @@ export const jobEvents = pgTable(
 export const TENANT_SCOPED_TABLES = [
   "jobs",
   "job_events",
+  "job_notes",
   "api_keys",
   "invitations",
   "task_types",

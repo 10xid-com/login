@@ -21,6 +21,7 @@ import { Client } from "pg";
 const MUST_BE_PROTECTED = [
   "jobs",
   "job_events",
+  "job_notes",
   "api_keys",
   "invitations",
   "departments",
