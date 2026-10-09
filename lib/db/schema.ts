@@ -100,6 +100,11 @@ export const jobDirection = pgEnum("job_direction", [
   "from_client",
   "to_client",
 ]);
+/**
+ * What kind of work a job is (0033): asked to price, priced, or doing. Website
+ * forms file quotes and estimates; a quote the customer accepts becomes a job.
+ */
+export const jobKind = pgEnum("job_kind", ["quote", "estimate", "job"]);
 export const jobStatus = pgEnum("job_status", [
   "draft",
   "open",
@@ -907,6 +912,7 @@ export const jobs = pgTable(
       .references(() => organizations.id),
     ref: text("ref").notNull(),
     direction: jobDirection("direction").notNull(),
+    kind: jobKind("kind").notNull().default("job"),
     title: text("title").notNull(),
     status: jobStatus("status").notNull().default("open"),
     createdBy: uuid("created_by")

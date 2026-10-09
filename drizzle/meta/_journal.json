@@ -232,6 +232,13 @@
       "when": 1790001600000,
       "tag": "0032_vinyl_wrap_toronto_test_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790001700000,
+      "tag": "0033_job_kind",
+      "breakpoints": true
     }
   ]
 }
