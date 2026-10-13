@@ -22,7 +22,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  *   3. whose identity is bound to a portal account (an accepted invitation or
  *      an operator's confirmation; a matching address alone is not enough).
  * The ticket names the sign-in session it came from, so the portal session it
- * becomes ends when that one does: signing out here, expiry, or inactivity.
+ * becomes ends when that one does: signing out here, a password reset, or an
+ * operator's revocation.
  */
 export async function GET(request: NextRequest) {
   const host = (request.headers.get("host") ?? "").toLowerCase();

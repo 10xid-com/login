@@ -260,6 +260,13 @@
       "when": 1790002000000,
       "tag": "0036_facebook_pages",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1790002100000,
+      "tag": "0037_signed_in_until_sign_out",
+      "breakpoints": true
     }
   ]
 }

@@ -173,6 +173,7 @@ Run by Codex on Paolo's machine from `main` at `caadd66` (Node 22.22.3, PostgreS
 - Any change to RLS behaviour such as FORCE ROW LEVEL SECURITY still requires a later recommendation and approval.
 - Any production/staging environment creation or cutover plan still requires approval before resource changes.
 - Any session-policy change still requires approval.
+- **Session lifetime (approved by Paolo 2026-10-13):** a sign-in on the login host lasts until the person signs out. Migration `0037_signed_in_until_sign_out` removes 0022's 7-day maximum and 48-hour inactivity limit; each use moves the end 400 days out (the browser's cookie ceiling). Signing out, sign out everywhere, a password reset, a new authenticator or recovery code, and operator revocation still end it.
 
 ## Migration acceptance criteria before any cutover
 The copied Neon database must pass:

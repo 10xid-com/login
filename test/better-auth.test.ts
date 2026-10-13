@@ -451,7 +451,7 @@ describe("review hardening", () => {
     const dead = (await b.session())!.session.id as string;
     await owner.query("begin");
     await owner.query("set local session_replication_role = replica");
-    await owner.query("update auth_sessions set last_active_at = now() - interval '3 days' where id = $1", [dead]);
+    await owner.query("update auth_sessions set expires_at = now() - interval '1 second' where id = $1", [dead]);
     await owner.query("commit");
     await signInWithCode(new Browser(), email);
     const { rows } = await owner.query("select 1 from auth_sessions where id = $1", [dead]);
@@ -577,34 +577,62 @@ describe("session clocks, enforced by the database", () => {
   const touch = async (id: string) =>
     (await app.query("select auth_session_touch($1) as hard_end", [id])).rows[0].hard_end as Date | null;
 
-  test("48 hours idle: signed out, and the portal is told so", async () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const endOf = async (id: string) =>
+    (await owner.query("select expires_at from auth_sessions where id = $1", [id])).rows[0].expires_at as Date;
+
+  test("no inactivity limit: weeks without a visit, still signed in", async () => {
     const { b, id } = await liveSession("idle");
+    await backdate(id, "last_active_at = now() - interval '30 days', updated_at = now() - interval '30 days'");
     expect(await touch(id)).toBeInstanceOf(Date);
-    await backdate(id, "last_active_at = now() - interval '48 hours 1 minute'");
-    expect(await b.session()).toBeNull();
-    expect(await touch(id)).toBeNull();
-  });
-
-  test("seven days from sign-in is the end, whatever the expiry column says", async () => {
-    const { b, id } = await liveSession("hard-end");
-    await backdate(id, "created_at = now() - interval '7 days 1 minute', expires_at = now() + interval '7 days'");
-    expect(await b.session()).toBeNull();
-    expect(await touch(id)).toBeNull();
-  });
-
-  test("activity never extends the seven days", async () => {
-    const { b, id } = await liveSession("no-extend");
-    await backdate(id, "created_at = now() - interval '6 days 23 hours', updated_at = now() - interval '2 days'");
-    // A refresh: Better Auth writes a new expiry seven days out.
-    await owner.query("update auth_sessions set expires_at = now() + interval '7 days' where id = $1", [id]);
-    const { rows } = await owner.query(
-      "select expires_at <= created_at + interval '7 days' as capped, last_active_at > now() - interval '1 minute' as active from auth_sessions where id = $1",
-      [id],
-    );
-    expect(rows[0]).toEqual({ capped: true, active: true });
-    const hardEnd = await touch(id);
-    expect(hardEnd!.getTime()).toBeLessThanOrEqual(Date.now() + 60 * 60 * 1000 + 1000);
     expect(await b.session()).not.toBeNull();
+  });
+
+  test("no fixed end: signed in long ago, still signed in", async () => {
+    const { b, id } = await liveSession("long-ago");
+    await backdate(id, "created_at = now() - interval '200 days'");
+    expect(await b.session()).not.toBeNull();
+    expect(await touch(id)).toBeInstanceOf(Date);
+  });
+
+  test("using the login host moves the end 400 days out, cookie included", async () => {
+    const { b, id } = await liveSession("refresh");
+    await backdate(id, "expires_at = now() + interval '1 day', updated_at = now() - interval '2 days'");
+    const response = await getAuth().handler(
+      new Request(`${env.origin}/api/auth/get-session`, {
+        headers: {
+          origin: b.origin,
+          "x-real-ip": b.ip,
+          cookie: [...b.jar].map(([k, v]) => `${k}=${v}`).join("; "),
+        },
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect((await endOf(id)).getTime()).toBeGreaterThan(Date.now() + 399 * DAY);
+    const cookie = response.headers.getSetCookie().find((c) => c.startsWith("10xid.session_token="));
+    expect(cookie).toMatch(new RegExp(`Max-Age=${400 * 24 * 60 * 60}(;|$)`, "i"));
+    expect(await b.session()).not.toBeNull();
+  });
+
+  test("using the portal moves the end 400 days out too", async () => {
+    const { id } = await liveSession("portal-refresh");
+    await backdate(id, "expires_at = now() + interval '1 day', last_active_at = now() - interval '2 days'");
+    const end = await touch(id);
+    expect(end!.getTime()).toBeGreaterThan(Date.now() + 399 * DAY);
+    expect((await endOf(id)).getTime()).toBe(end!.getTime());
+  });
+
+  test("the end is never more than 400 days away, whatever is written", async () => {
+    const { id } = await liveSession("capped");
+    await owner.query("update auth_sessions set expires_at = now() + interval '1000 days' where id = $1", [id]);
+    expect((await endOf(id)).getTime()).toBeLessThanOrEqual(Date.now() + 400 * DAY + 1000);
+  });
+
+  test("past its end, signed out, and the portal is told so", async () => {
+    const { b, id } = await liveSession("lapsed");
+    await backdate(id, "expires_at = now() - interval '1 second'");
+    expect(await b.session()).toBeNull();
+    expect(await touch(id)).toBeNull();
   });
 
   test("a session row cannot be re-pointed or re-dated", async () => {

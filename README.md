@@ -50,8 +50,9 @@ handed to `app.10xid.com` by the existing single-use ticket handoff; being signe
 nothing by itself.
 
 Its tables (`auth_*`) belong to their own restricted role, `portal_auth` (`AUTH_DATABASE_URL`);
-the portal's role cannot read them. The seven-day maximum and 48-hour inactivity limit are
-enforced by Postgres. The full design, the Railway variables, provider setup, deployment order
+the portal's role cannot read them. A sign-in lasts until the person signs out: there is no
+inactivity limit, and each use moves its end 400 days out (the browser's own cookie ceiling).
+Postgres enforces that (0037). The full design, the Railway variables, provider setup, deployment order
 and rollback are in **[`docs/better-auth-cutover.md`](docs/better-auth-cutover.md)**.
 
 An operator answers binding requests (an account from before, signing in for the first time)

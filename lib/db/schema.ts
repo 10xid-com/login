@@ -1798,12 +1798,15 @@ export const authUsers = pgTable("auth_users", {
 });
 
 /**
- * A sign-in on the login host. The clocks are the database's (0022's
- * trigger and row-level security), not the application's:
+ * A sign-in on the login host. The clock is the database's (0022's trigger
+ * and row-level security, as 0037 left them), not the application's:
  *
- *   expires_at       never later than created_at + 7 days, whatever is written.
- *   last_active_at   set by the database on every update; a session idle for
- *                    48 hours is invisible to portal_auth, so it is signed out.
+ *   expires_at       never more than 400 days from now, whatever is written;
+ *                    every refresh moves it there, so a session in use lasts
+ *                    until it is signed out. Past it, the row is invisible to
+ *                    portal_auth, so the browser is signed out.
+ *   last_active_at   set by the database on every update. Recorded, not a
+ *                    limit: there is no inactivity timeout.
  *   mfa_verified_at  always null on insert; set only by the MFA gate once the
  *                    authenticator (or a recovery code) has been checked.
  */

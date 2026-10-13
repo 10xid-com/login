@@ -317,7 +317,7 @@ test("an existing account is not merged by address: it waits for an operator", a
   await expect(page).toHaveURL(new RegExp(`^${APP}/dashboard`));
 });
 
-test("48 hours idle on the login host ends the portal session on its next request", async ({ page }) => {
+test("a sign-in that has ended on the login host ends the portal session on its next request", async ({ page }) => {
   const email = await invite("idle");
   await page.goto(`${LOGIN}/auth/sign-in/code`);
   await page.getByLabel("Email").fill(email);
@@ -330,7 +330,7 @@ test("48 hours idle on the login host ends the portal session on its next reques
 
   await sql(
     `begin; set local session_replication_role = replica;
-     update auth_sessions set last_active_at = now() - interval '49 hours'
+     update auth_sessions set expires_at = now() - interval '1 second'
       where user_id = (select id from auth_users where email = '${email}'); commit;`,
   );
   await page.goto(`${APP}/dashboard`);

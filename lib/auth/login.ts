@@ -29,7 +29,7 @@ export type LoginIdentity = {
   user: { id: string; email: string; emailVerified: boolean; name: string };
 };
 
-/** The current Better Auth session, if any. Idle or expired sessions are invisible (0022). */
+/** The current Better Auth session, if any. Expired sessions are invisible (0022, 0037). */
 export async function getLoginSession(): Promise<LoginIdentity | null> {
   const result = await getAuth().api.getSession({ headers: await headers() });
   if (!result) return null;
@@ -181,8 +181,8 @@ export function nextQuery(next: string, prefix = "?"): string {
  * created within `freshAge` (ten minutes here, which is right for the
  * sensitive actions that share the setting), so the account page and the
  * sign-out buttons failed for anybody signed in longer than that. The table's
- * row-level security already hides every session that is expired, idle 48
- * hours, or past its seven days (0022), so what this returns is what is live.
+ * row-level security already hides every session that has expired (0022,
+ * 0037), so what this returns is what is live.
  */
 export async function ownSignInSessions(userId: string) {
   return authDb()
