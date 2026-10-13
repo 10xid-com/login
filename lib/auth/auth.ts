@@ -16,6 +16,7 @@ import {
 } from "@/lib/db/schema";
 import { sendAuthCode } from "./mailer";
 import { mfaGate } from "./mfa-gate";
+import { MAX_COOKIE_SECONDS } from "./policy";
 import { PRIMARY_HOST, originFor } from "./sso";
 
 /**
@@ -35,12 +36,14 @@ import { PRIMARY_HOST, originFor } from "./sso";
  *     operator (lib/auth/account.ts), and what the account may do is decided by
  *     the portal's central authorization function, per request.
  *
- * The session clocks — seven days from sign-in, never extended, and 48 hours
- * of inactivity — are enforced by the database (0022), not by this file.
+ * A sign-in lasts until the person signs out (0037): there is no inactivity
+ * limit, and every refresh moves its end to 400 days out — the browser's own
+ * ceiling on a cookie, so the row and the cookie lapse together. That rule is
+ * enforced by the database, not by this file.
  */
 
 export const AUTH_BASE_PATH = "/api/auth";
-export const SEVEN_DAYS = 7 * 24 * 60 * 60;
+export const SESSION_SECONDS = MAX_COOKIE_SECONDS;
 export const CODE_MINUTES = 10;
 
 export type SocialProvider = "google" | "microsoft";
@@ -171,11 +174,11 @@ function createAuth() {
     },
 
     session: {
-      expiresIn: SEVEN_DAYS,
-      // A refresh is a write, and every write is activity: 0022's trigger sets
-      // last_active_at and caps expires_at at created_at + 7 days, and its
-      // policy hides a session idle for 48 hours. Refreshing at most once a
-      // minute keeps the inactivity clock exact without a write per request.
+      expiresIn: SESSION_SECONDS,
+      // A refresh writes a new expiry 400 days out and sends the cookie again
+      // with the same lifetime, so a session in use never runs out. The
+      // database caps the expiry at 400 days from now whatever is written
+      // (0037). Once a minute at most, so it is not a write per request.
       updateAge: 60,
       cookieCache: { enabled: false },
       freshAge: 10 * 60,
