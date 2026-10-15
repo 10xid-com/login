@@ -127,3 +127,18 @@ describe("the website copy", () => {
     }
   });
 });
+
+describe("the website copy, by name (0039)", () => {
+  test("every row is given its business's name by the database, and it cannot be changed", async () => {
+    await as(rotaryId, async () => {
+      await insertJob(rotarySite, rotaryId, 9, "Named");
+      const { rows } = await appRole.query("select business from site_jobs where source_id = 9");
+      const { rows: org } = await owner.query("select name from organizations where id = $1", [rotaryId]);
+      expect(rows[0].business).toBe(org[0].name);
+      // Written by the application as something else: the database puts the real name back.
+      await appRole.query("update site_jobs set business = 'Somebody else' where source_id = 9");
+      const { rows: after } = await appRole.query("select business from site_jobs where source_id = 9");
+      expect(after[0].business).toBe(org[0].name);
+    });
+  });
+});

@@ -2029,6 +2029,8 @@ const copyOf = () => ({
   organizationId: uuid("organization_id")
     .notNull()
     .references(() => organizations.id),
+  /** 0039: the business's name, filled by the database from organization_id. */
+  business: text("business"),
 });
 
 /** The last copy of each website connection. */
