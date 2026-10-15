@@ -53,6 +53,15 @@ const MUST_BE_PROTECTED = [
   "social_media_uploads",
   // Grant decisions and what agency people do: one business's record.
   "audit_events",
+  // The website copy (0038): one business's website records.
+  "site_copies",
+  "site_jobs",
+  "site_clients",
+  "site_materials",
+  "site_stock_moves",
+  "site_posts",
+  "site_social_posts",
+  "site_social_profiles",
 ];
 
 /** Read before a scope exists. Each entry needs a reason that survives review. */

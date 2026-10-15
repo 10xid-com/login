@@ -267,6 +267,13 @@
       "when": 1790002100000,
       "tag": "0037_signed_in_until_sign_out",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1790002200000,
+      "tag": "0038_website_copy",
+      "breakpoints": true
     }
   ]
 }
