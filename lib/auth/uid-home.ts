@@ -19,8 +19,8 @@ import "server-only";
  * to somewhere else, or back into itself. A pair that does not pass is
  * dropped, and that person simply goes to the portal.
  *
- * This is a redirect, not a sign-in: a UiD page does not redeem the
- * cross-domain handoff, and keeps its own passcode for anything it changes.
+ * This is only where signing in ends. The UiD page then signs the person in
+ * on its own host through this one (lib/auth/uid-sites, UID_SITES).
  */
 
 const ALLOWED_SUFFIX = ".10xid.com";
