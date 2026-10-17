@@ -1,4 +1,4 @@
--- 0046: Rana's account moves to samay@tboxstudio.com.
+-- 0047: Rana's account moves to samay@tboxstudio.com.
 --
 -- WHY. 0041 moved Rana's account to web@brandingcentres.com, and 0043 bound
 -- the sign-in on that address to it. Paolo's decision of 2026-10-17: the
@@ -95,7 +95,7 @@ BEGIN
   SELECT o.id INTO v_org_id FROM organizations o WHERE o.slug = 'vinyl-wrap-toronto' AND o.deleted_at IS NULL;
   IF v_org_id IS NOT NULL THEN
     INSERT INTO audit_events (organization_id, actor_user_id, action, target)
-    VALUES (v_org_id, NULL, 'user.email_changed', v_old || ' -> ' || v_new || ' (migration 0046)');
+    VALUES (v_org_id, NULL, 'user.email_changed', v_old || ' -> ' || v_new || ' (migration 0047)');
   END IF;
 END
 $$;
