@@ -288,6 +288,13 @@
       "when": 1790002400000,
       "tag": "0040_remove_website_copy",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1790002500000,
+      "tag": "0041_rana_on_branding_centres_address",
+      "breakpoints": true
     }
   ]
 }
