@@ -295,6 +295,13 @@
       "when": 1790002500000,
       "tag": "0041_rana_on_branding_centres_address",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1790002600000,
+      "tag": "0042_codes_stored_encrypted",
+      "breakpoints": true
     }
   ]
 }

@@ -277,7 +277,13 @@ function createAuth() {
         otpLength: 6,
         expiresIn: CODE_MINUTES * 60,
         allowedAttempts: 5,
-        storeOTP: "hashed",
+        // A code is the address's, not the device's: asking again, from this
+        // device or another, sends the same code while it is still good
+        // (and gives it ten minutes more) instead of killing the one already
+        // in the mailbox. Reusing it needs it readable, so it is stored
+        // encrypted with BETTER_AUTH_SECRET rather than hashed.
+        storeOTP: "encrypted",
+        resendStrategy: "reuse",
         async sendVerificationOTP({ email, otp, type }) {
           if (type !== "sign-in" && type !== "forget-password") return;
           // Codes go only to addresses that may sign in at all; anybody else's

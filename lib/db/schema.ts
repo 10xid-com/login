@@ -1863,7 +1863,7 @@ export const authAccounts = pgTable(
   ],
 );
 
-/** One-time codes (stored hashed), OAuth state and similar short-lived values. */
+/** One-time codes (stored encrypted), OAuth state and similar short-lived values. */
 export const authVerifications = pgTable(
   "auth_verifications",
   {
