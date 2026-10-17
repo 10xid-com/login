@@ -44,8 +44,28 @@ them: `address=https://…` pairs, comma-separated, the address being the portal
 authenticator, `/` on the login host (`app/page.tsx`) sends it to its UiD; a signed-in visit to
 login.10xid.com does the same. Anybody not listed goes to the portal as before, and a handoff to a
 client domain is unaffected. Only https addresses on a 10xid.com subdomain other than the login
-host are accepted (`lib/auth/uid-home.ts`). It is a redirect, not a sign-in: a UiD page does not
-redeem the handoff, and keeps its own passcode.
+host are accepted (`lib/auth/uid-home.ts`). Being sent there is a redirect; signing in on a UiD page is
+the next section.
+
+### UiD pages sign in here
+
+A UiD page (`uid-rana.10xid.com`, `uid-bypaolo.10xid.com`) is a small service of its own with no
+database. It signs people in the way a client domain does, by a single-use ticket, with one
+difference: its server redeems the ticket here, server to server, rather than in the database.
+
+1. With no session of its own, the UiD sends the browser to `/auth/uid/authorize?host=…&state=…`.
+2. Here: a sign-in session, past the authenticator, bound to a portal account, and `UID_SITES`
+   letting that account open that UiD. Then a ticket bound to that host, for 30 seconds, back to
+   `https://<host>/auth/callback`.
+3. The UiD's server posts the ticket to `/api/uid/redeem` with `Authorization: Bearer
+   <its secret>` and gets back who signed in, and the sign-in session it came from.
+4. Every few minutes it asks `/api/uid/alive` whether that sign-in is still live
+   (`auth_session_touch`, as the portal does), so signing out here ends it there too.
+
+`UID_SITES` lists each UiD and who may open it (`host=address|address`, comma-separated);
+`UID_SITE_KEY` derives each UiD's secret from its host (`uidSiteSecret` in
+`lib/auth/uid-sites.ts`), which that UiD's service holds as `UID_SITE_SECRET`. One key here
+serves every UiD, and no UiD can redeem another's tickets. Without the key, no UiD signs in.
 
 `app.10xid.com` and `login.10xid.com` are siblings, but the session cookie is `__Host-`
 prefixed and so is never shared between them. That is deliberate — a cookie scoped to

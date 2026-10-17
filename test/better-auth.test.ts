@@ -36,6 +36,10 @@ const { inviteToOrganization } = await import("@/lib/db/invitations");
 const { mintTicket, redeemTicket, consumeTicketsForAuthSession } = await import("@/lib/db/identity");
 const { userByAuthUserId } = await import("@/lib/db/accounts");
 const { hashTicket } = await import("@/lib/auth/sso");
+const { uidSiteSecret } = await import("@/lib/auth/uid-sites");
+const { POST: uidRedeem } = await import("@/app/api/uid/redeem/route");
+const { POST: uidAlive } = await import("@/app/api/uid/alive/route");
+const { NextRequest } = await import("next/server");
 
 const owner = new Client({ connectionString: process.env.DATABASE_URL });
 const app = new Client({ connectionString: process.env.DATABASE_APP_URL });
@@ -777,11 +781,95 @@ describe("the handoff names the bound account", () => {
   });
 });
 
+describe("UiD pages sign in through the login host", () => {
+  const UID = "uid-test.10xid.com";
+  const KEY = "a-test-only-uid-site-key-0123456789abcdef";
+  const post = (handler: (r: InstanceType<typeof NextRequest>) => Promise<Response>, body: unknown, secret = uidSiteSecret(UID, KEY)) =>
+    handler(new NextRequest(`${env.origin}/api/uid/x`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
+      body: JSON.stringify(body),
+    }));
+
+  /** Signed in, past the authenticator, bound; returns the account and its sign-in session. */
+  async function boundAccount(label: string) {
+    const { b, email } = await invitedAndSignedIn(label);
+    await enroll(b);
+    const id = (await authUserId(email))!;
+    await resolveAccount({ id, email, emailVerified: true, name: "x" });
+    return { b, email, account: (await userByAuthUserId(id))!, authSessionId: (await b.session())!.session.id as string };
+  }
+  const mintFor = (token: string, userId: string, authSessionId: string, host = UID) =>
+    mintTicket({
+      ticketHash: hashTicket(token),
+      userId,
+      audienceHost: host,
+      returnPath: "/",
+      sourceAuthSessionId: authSessionId,
+      expiresAt: new Date(Date.now() + 30_000),
+    });
+
+  beforeEach(() => {
+    vi.stubEnv("UID_SITE_KEY", KEY);
+  });
+
+  test("a UiD's server redeems its own ticket once, with its own secret, and learns who signed in", async () => {
+    const { email, account, authSessionId } = await boundAccount("uid-redeem");
+    vi.stubEnv("UID_SITES", `${UID}=${email}`);
+    const token = "uid-ticket-one-0123456789";
+    await mintFor(token, account.id, authSessionId);
+
+    expect((await post(uidRedeem, { host: UID, ticket: token }, "not-the-secret")).status).toBe(401);
+    expect((await post(uidRedeem, { host: "uid-other.10xid.com", ticket: token }, uidSiteSecret("uid-other.10xid.com", KEY))).status).toBe(401);
+    const ok = await post(uidRedeem, { host: UID, ticket: token });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ email, name: account.fullName ?? "", session: authSessionId });
+    expect((await post(uidRedeem, { host: UID, ticket: token })).status).toBe(400);
+  });
+
+  test("a ticket minted for another host, or for an account UID_SITES doesn't list, gets nothing", async () => {
+    const { email, account, authSessionId } = await boundAccount("uid-refused");
+    vi.stubEnv("UID_SITES", `${UID}=${email}`);
+    await mintFor("uid-ticket-portal-0123456789", account.id, authSessionId, "app.portal-a.test:3001");
+    expect((await post(uidRedeem, { host: UID, ticket: "uid-ticket-portal-0123456789" })).status).toBe(400);
+
+    await mintFor("uid-ticket-unlisted-012345678", account.id, authSessionId);
+    vi.stubEnv("UID_SITES", `${UID}=somebody-else@test.invalid`);
+    expect((await post(uidRedeem, { host: UID, ticket: "uid-ticket-unlisted-012345678" })).status).toBe(400);
+  });
+
+  test("the UiD's sign-in stays alive with the login host's, and ends when it does", async () => {
+    const { email, authSessionId } = await boundAccount("uid-alive");
+    vi.stubEnv("UID_SITES", `${UID}=${email}`);
+    const alive = async (body: unknown, secret?: string) => {
+      const r = await post(uidAlive, body, secret);
+      return r.status === 200 ? ((await r.json()) as { alive: boolean }).alive : r.status;
+    };
+    expect(await alive({ host: UID, session: authSessionId, email })).toBe(true);
+    expect(await alive({ host: UID, session: authSessionId, email }, "not-the-secret")).toBe(401);
+    expect(await alive({ host: UID, session: authSessionId, email: "somebody-else@test.invalid" })).toBe(false);
+    expect(await alive({ host: UID, session: "no-such-session", email })).toBe(false);
+    await app.query("select auth_revoke_session($1)", [authSessionId]);
+    expect(await alive({ host: UID, session: authSessionId, email })).toBe(false);
+  });
+
+  test("the UiD's ticket names the bound account, past the authenticator, and an allowed one", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("app/auth/uid/authorize/route.ts", "utf8");
+    expect(src).toContain("userByAuthUserId(session.user.id)");
+    expect(src).toContain("if (!session.mfaVerifiedAt)");
+    expect(src).toContain("if (!mayOpenUid(uid, account.email))");
+    expect(src).toContain("userId: account.id");
+    expect(src).toContain("audienceHost: uid");
+  });
+});
+
 describe("where sign-in may resume", () => {
-  test("only the handoff or the account page; everything else is home", () => {
+  test("only a handoff (the portal's or a UiD's) or the account page; everything else is home", () => {
     expect(safeNext("/auth/sso/authorize?site=x&state=y")).toBe("/auth/sso/authorize?site=x&state=y");
+    expect(safeNext("/auth/uid/authorize?host=x&state=y")).toBe("/auth/uid/authorize?host=x&state=y");
     expect(safeNext("/auth/account")).toBe("/auth/account");
-    for (const bad of ["//evil.test", "https://evil.test", "/\\evil.test", "/jobs", "/auth/sso/authorizeX", null, ""]) {
+    for (const bad of ["//evil.test", "https://evil.test", "/\\evil.test", "/jobs", "/auth/sso/authorizeX", "/auth/uid/authorizeX", null, ""]) {
       expect(safeNext(bad)).toBe("/");
     }
   });
