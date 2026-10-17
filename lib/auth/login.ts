@@ -160,13 +160,13 @@ export async function accountStatus(
 
 /**
  * Where to go once signing in is finished. Only a path on THIS host, and only
- * one of the two places sign-in can be resuming: a handoff to the portal, or
- * the account page. Anything else becomes "/", which sends the person to the
- * portal by the ordinary handoff.
+ * one of the places sign-in can be resuming: a handoff to the portal or to a
+ * UiD page (lib/auth/uid-sites), or the account page. Anything else becomes
+ * "/", which sends the person to the portal by the ordinary handoff.
  */
 export function safeNext(input: unknown): string {
   const path = safePath(input);
-  if (path.startsWith("/auth/sso/authorize?") || path === "/auth/account") return path;
+  if (path.startsWith("/auth/sso/authorize?") || path.startsWith("/auth/uid/authorize?") || path === "/auth/account") return path;
   return "/";
 }
 

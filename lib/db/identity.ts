@@ -976,6 +976,16 @@ export async function redeemTicket(
   return rows[0] ?? null;
 }
 
+/**
+ * Is this sign-in session still live and past the authenticator? Asked for a
+ * UiD page (app/api/uid/alive), through the same database function the portal
+ * asks on every request, so the two can never disagree about a sign-out.
+ */
+export async function authSessionLive(authSessionId: string): Promise<boolean> {
+  const result = await db.execute(sql`select auth_session_touch(${authSessionId}) as ends`);
+  return Boolean(result.rows[0]?.ends);
+}
+
 /** Signing out of the login host kills tickets still in flight from that sign-in. */
 export async function consumeTicketsForAuthSession(authSessionId: string) {
   await db
