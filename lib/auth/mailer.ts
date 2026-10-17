@@ -5,7 +5,7 @@ import { PRIMARY_HOST, originFor } from "./sso";
 /**
  * Delivery of one-time codes: signing in, verifying an address, resetting a
  * password. Better Auth's email-OTP plugin generates and checks them (stored
- * hashed); this only carries them.
+ * encrypted); this only carries them.
  *
  * In production this goes through Resend. With no API key configured — local
  * development and tests — the code is written to the server log and to a file,

@@ -21,7 +21,11 @@ export default async function SignInCodePage({
 }) {
   const params = await searchParams;
   const next = await resumeFor(params.next);
-  const error = params.error ? ERRORS[params.error] : null;
+  // A refused code says which address it was checked against: a page left
+  // open on another device may be for a different one.
+  const error = params.error === "code" && params.email
+    ? `That code is not right for ${params.email}, or it has expired. Codes last ten minutes.`
+    : params.error ? ERRORS[params.error] : null;
 
   if (!params.email || params.notice === "prove") {
     return (
@@ -47,13 +51,17 @@ export default async function SignInCodePage({
       footer={<TextLink href={`/auth/sign-in/code${nextQuery(next)}`}>Use a different address</TextLink>}>
       <Notice>
         {params.notice === "resent"
-          ? `A new code is on its way to ${params.email}. Use the newest one; the one before it no longer works.`
-          : `If ${params.email} can sign in to 10XiD, a code is on its way. It lasts ten minutes.`}
+          ? `The code is on its way to ${params.email} again: the same code, good for ten more minutes.`
+          : `If ${params.email} can sign in to 10XiD, a code is on its way. It lasts ten minutes, and works on any device.`}
       </Notice>
       <form action={signInWithCodeAction}>
         <Hidden name="next" value={next} />
-        <Hidden name="email" value={params.email} />
-        <label htmlFor="code" className={labelClass}>Code</label>
+        {/* Shown, and can be changed: the code is the address's, so this page
+            works for it on any device, whichever one asked for the code. */}
+        <label htmlFor="email" className={labelClass}>Email</label>
+        <input id="email" name="email" type="email" autoComplete="email" required
+          defaultValue={params.email} className={inputClass} />
+        <label htmlFor="code" className={`${labelClass} mt-4`}>Code</label>
         <input id="code" name="code" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}"
           maxLength={6} required autoFocus className={inputClass} />
         {error ? <FieldError>{error}</FieldError> : null}
@@ -63,7 +71,7 @@ export default async function SignInCodePage({
         <Hidden name="next" value={next} />
         <Hidden name="email" value={params.email} />
         <Hidden name="resend" value="1" />
-        <SecondaryButton>Send a new code</SecondaryButton>
+        <SecondaryButton>Email the code again</SecondaryButton>
       </form>
     </AuthCard>
   );

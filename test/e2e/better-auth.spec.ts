@@ -567,7 +567,7 @@ test("operator screen: invite, then a code is asked for once five minutes have p
   await theirs.close();
 });
 
-test("send a new code: the newest works, the one before it does not; the emailed link resumes the handoff", async ({ page, context }) => {
+test("asking again sends the same code, which works on another device; the emailed link resumes the handoff", async ({ page, context }) => {
   const email = await invite("resend");
 
   // Start from a portal deep link, so sign-in is resuming a handoff.
@@ -576,22 +576,23 @@ test("send a new code: the newest works, the one before it does not; the emailed
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: "Email me a code" }).click();
   const first = await codeFor(email, "sign-in");
-  await page.getByRole("button", { name: "Send a new code" }).click();
-  await expect(page.getByRole("status")).toContainText("A new code is on its way");
-  let second = await codeFor(email, "sign-in");
-  for (let i = 0; i < 20 && second === first; i++) {
-    await new Promise((r) => setTimeout(r, 250));
-    second = await codeFor(email, "sign-in");
-  }
-  expect(second).not.toBe(first);
+  const sent = await codesSentTo(email);
+  await page.getByRole("button", { name: "Email the code again" }).click();
+  await expect(page.getByRole("status")).toContainText("the same code");
+  for (let i = 0; i < 20 && (await codesSentTo(email)) === sent; i++) await new Promise((r) => setTimeout(r, 250));
+  expect(await codesSentTo(email)).toBe(sent + 1);
+  expect(await codeFor(email, "sign-in")).toBe(first);
 
-  // Open the emailed link in a new tab: no `next` in it, but the handoff resumes.
+  // The emailed link opened elsewhere (another tab standing in for another
+  // device): no `next` in it, but the handoff resumes. A wrong code is
+  // refused, naming the address it was checked against; the real one works.
   const tab = await context.newPage();
   await tab.goto(`${LOGIN}/auth/sign-in/code?email=${encodeURIComponent(email)}`);
-  await tab.getByLabel("Code").fill(first);
+  await expect(tab.getByLabel("Email")).toHaveValue(email);
+  await tab.getByLabel("Code").fill(first === "000000" ? "111111" : "000000");
   await tab.getByRole("button", { name: "Continue" }).click();
-  await expect(tab.getByRole("alert")).toContainText("not right");
-  await tab.getByLabel("Code").fill(second);
+  await expect(tab.getByRole("alert")).toContainText(`not right for ${email}`);
+  await tab.getByLabel("Code").fill(first);
   await tab.getByRole("button", { name: "Continue" }).click();
   await enrolFromPage(tab);
   await tab.getByRole("button", { name: /saved them/ }).click();

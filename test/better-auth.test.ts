@@ -269,6 +269,28 @@ describe("only invited addresses get an identity", () => {
 
 });
 
+describe("an emailed code is the address's, not the device's", () => {
+  test("asking again from another device sends the same code, which works on either", async () => {
+    const email = address("two-devices");
+    await inviteToOrganization({ organizationId: orgId, email, role: "member", invitedBy: inviterId });
+    const computer = new Browser();
+    const phone = new Browser();
+    await computer.call("/email-otp/send-verification-otp", { email, type: "sign-in" });
+    const first = lastCode(email, "sign-in");
+    const sent = mailbox.filter((m) => m.to === email).length;
+    await phone.call("/email-otp/send-verification-otp", { email, type: "sign-in" });
+    expect(mailbox.filter((m) => m.to === email).length).toBe(sent + 1);
+    expect(lastCode(email, "sign-in")).toBe(first);
+    // Kept unreadable at rest: neither the code nor a plain hash of it.
+    const { rows } = await owner.query("select value from auth_verifications where identifier = $1", [`sign-in-otp-${email}`]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].value).not.toContain(first);
+    // A wrong try on one device doesn't spend it for the other.
+    expect((await phone.call("/sign-in/email-otp", { email, otp: first === "000000" ? "111111" : "000000" })).status).toBe(400);
+    expect((await computer.call("/sign-in/email-otp", { email, otp: first })).status).toBe(200);
+  });
+});
+
 describe("the authenticator is required after every way of signing in", () => {
   test("password: signed in, but every endpoint except finishing sign-in answers 403", async () => {
     const { email } = await invitedAndSignedIn("gate-password");
