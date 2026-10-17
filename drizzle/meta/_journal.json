@@ -302,6 +302,13 @@
       "when": 1790002600000,
       "tag": "0042_codes_stored_encrypted",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1790002700000,
+      "tag": "0043_confirm_ethan_and_rana_sign_ins",
+      "breakpoints": true
     }
   ]
 }
