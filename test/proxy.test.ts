@@ -59,9 +59,17 @@ describe("with PORTAL_HOST: the login host keeps only sign-in", () => {
     expect(target(visit(LOGIN, "/jobs/123?tab=files", { session: true }))).toBe(
       `https://${PORTAL}/jobs/123?tab=files`,
     );
-    expect(target(visit(LOGIN, "/", { session: true }))).toBe(
-      `https://${PORTAL}/`,
+    expect(target(visit(LOGIN, "/?tab=x", { session: true }))).toBe(
+      `https://${PORTAL}/?tab=x`,
     );
+  });
+
+  test("a signed-in visit to the bare / stays, so the page can pick the person's UiD or the portal", () => {
+    expect(target(visit(LOGIN, "/", { session: true }))).toBeNull();
+  });
+
+  test("a signed-out visit to / is asked to sign in, and ends at / again", () => {
+    expect(target(visit(LOGIN, "/"))).toBe(`https://${LOGIN}/auth/sign-in?next=%2F`);
   });
 
   test("a signed-out visit is asked to sign in first, keeping the path", () => {
