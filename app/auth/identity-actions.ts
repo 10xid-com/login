@@ -124,7 +124,9 @@ export async function signInWithCodeAction(form: FormData) {
     getAuth().api.signInEmailOTP({ body: { email: address.data, otp: code.data }, headers: h }),
   );
   if (!result.ok) {
-    // NOT_INVITED lands here too, worded the same as a wrong code.
+    // NOT_INVITED lands here too, worded the same as a wrong code. The page
+    // can't say which it was; the log says, without the address or the code.
+    console.warn(`[auth] an emailed-code sign-in was refused: ${result.code}`);
     to("/auth/sign-in/code", { email: address.data, error: "code", next });
   }
   await rememberSpentCode(code.data);
