@@ -20,7 +20,8 @@
 --   3. The account's portal sessions are revoked.
 --
 -- SKIPS, never raises, on: no account on the old address; the new address
--- already held by another account; or another sign-in identity already on
+-- already held by another account (users.email or user_emails, deleted
+-- accounts included); or another sign-in identity already on
 -- the new address (then nothing at all is written, and the account stays on
 -- the old address for an operator to sort out).
 --
@@ -52,7 +53,10 @@ BEGIN
     RETURN;
   END IF;
 
-  IF EXISTS (SELECT 1 FROM user_emails e WHERE e.email = v_new AND e.user_id <> v_user_id) THEN
+  -- users.email is unique across deleted accounts too, and need not have a
+  -- user_emails row, so both are checked.
+  IF EXISTS (SELECT 1 FROM user_emails e WHERE e.email = v_new AND e.user_id <> v_user_id)
+     OR EXISTS (SELECT 1 FROM users u WHERE u.email = v_new AND u.id <> v_user_id) THEN
     RAISE NOTICE '[rana] SKIPPED — % is already an address of another account. Nothing written.', v_new;
     RETURN;
   END IF;
