@@ -309,6 +309,13 @@
       "when": 1790002700000,
       "tag": "0043_confirm_ethan_and_rana_sign_ins",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1790002800000,
+      "tag": "0044_ethan_is_staff",
+      "breakpoints": true
     }
   ]
 }
