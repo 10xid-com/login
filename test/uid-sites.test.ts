@@ -15,12 +15,12 @@ afterEach(() => {
 describe("parseUidSites", () => {
   test("host=address|address pairs, comma-separated, in lower case", () => {
     const sites = parseUidSites(
-      " UID-Rana.10xid.com = Web@BrandingCentres.com | paolo@tboxstudio.com ,uid-bypaolo.10xid.com=paolo@tboxstudio.com",
+      " UID-Rana.10xid.com = Samay@TboxStudio.com | paolo@tboxstudio.com ,uid-bypaolo.10xid.com=paolo@tboxstudio.com",
       "login.10xid.com",
       "app.10xid.com",
     );
     expect(Object.fromEntries([...sites].map(([h, p]) => [h, [...p]]))).toEqual({
-      "uid-rana.10xid.com": ["web@brandingcentres.com", "paolo@tboxstudio.com"],
+      "uid-rana.10xid.com": ["samay@tboxstudio.com", "paolo@tboxstudio.com"],
       "uid-bypaolo.10xid.com": ["paolo@tboxstudio.com"],
     });
   });

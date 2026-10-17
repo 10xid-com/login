@@ -330,6 +330,13 @@
       "when": 1790003000000,
       "tag": "0046_ethan_memberships_audit_label",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1790003100000,
+      "tag": "0047_rana_on_samay_address",
+      "breakpoints": true
     }
   ]
 }

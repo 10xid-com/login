@@ -17,7 +17,7 @@ import { PORTAL_HOST, PRIMARY_HOST } from "./sso";
  *
  *   UID_SITES     host=address|address, comma-separated: each UiD, and the
  *                 portal accounts that may open it.
- *                 uid-rana.10xid.com=web@brandingcentres.com|paolo@tboxstudio.com,
+ *                 uid-rana.10xid.com=samay@tboxstudio.com|paolo@tboxstudio.com,
  *                 uid-bypaolo.10xid.com=paolo@tboxstudio.com
  *   UID_SITE_KEY  32+ random characters. Each UiD's secret is derived from it
  *                 and its host (uidSiteSecret), so one key here serves them
