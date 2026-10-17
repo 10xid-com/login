@@ -36,6 +36,17 @@ insert into organization_domains (organization_id, hostname, is_primary, verifie
 select id, 'app.10xid.com', false, now() from organizations where type = 'internal';
 ```
 
+### Where signing in ends
+
+At the portal, unless the person has a UiD of their own. `UID_HOMES` on the login service lists
+them: `address=https://…` pairs, comma-separated, the address being the portal account's
+(`paolo@10xid.com=https://uid-bypaolo.10xid.com/v3/,…`). Once that account's identity is past the
+authenticator, `/` on the login host (`app/page.tsx`) sends it to its UiD; a signed-in visit to
+login.10xid.com does the same. Anybody not listed goes to the portal as before, and a handoff to a
+client domain is unaffected. Only https addresses on a 10xid.com subdomain other than the login
+host are accepted (`lib/auth/uid-home.ts`). It is a redirect, not a sign-in: a UiD page does not
+redeem the handoff, and keeps its own passcode.
+
 `app.10xid.com` and `login.10xid.com` are siblings, but the session cookie is `__Host-`
 prefixed and so is never shared between them. That is deliberate — a cookie scoped to
 `.10xid.com` could be read or overwritten by any other subdomain.

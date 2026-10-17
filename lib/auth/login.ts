@@ -14,6 +14,7 @@ import {
 } from "@/lib/db/accounts";
 import { getAuth, loginOrigin } from "./auth";
 import { safePath } from "./sso";
+import { uidHomeFor } from "./uid-home";
 
 /**
  * The login host's view of who is signing in, for its pages, server actions
@@ -167,6 +168,19 @@ export function safeNext(input: unknown): string {
   const path = safePath(input);
   if (path.startsWith("/auth/sso/authorize?") || path === "/auth/account") return path;
   return "/";
+}
+
+/**
+ * The person's own UiD, when signing in ends there rather than at the portal
+ * (lib/auth/uid-home): only for a session past the authenticator, bound to a
+ * portal account that UID_HOMES lists. Null means the portal, as before.
+ */
+export async function uidHomeForSession(): Promise<string | null> {
+  if (!process.env.UID_HOMES) return null;
+  const session = await getLoginSession();
+  if (!session?.mfaVerifiedAt) return null;
+  const account = await userByAuthUserId(session.user.id);
+  return account ? uidHomeFor(account.email) : null;
 }
 
 /** `?next=` for a link, empty when it is just "/". */

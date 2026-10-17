@@ -84,8 +84,11 @@ export function proxy(request: NextRequest) {
   // session here is about to be asked to sign in either way, so they are asked
   // now, and sent on afterwards: `next` is a path, and the login host forwards
   // that path to the portal on the way back out. With a session, the portal
-  // host takes it from here, by the ordinary handoff.
+  // host takes it from here, by the ordinary handoff — except the bare "/",
+  // where signing in ends: app/page.tsx decides between the person's own UiD
+  // (UID_HOMES) and the portal, which needs the session this layer can't read.
   if (primary && portal && portal !== primary && host === primary) {
+    if (hasSession && pathname === "/" && !search) return NextResponse.next();
     if (!hasSession) {
       const login = request.nextUrl.clone();
       login.pathname = "/auth/sign-in";
