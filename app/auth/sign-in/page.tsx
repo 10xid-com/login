@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { connection } from "next/server";
 import { configuredProviders } from "@/lib/auth/auth";
 import { nextQuery, safeNext } from "@/lib/auth/login";
-import { signInWithPasswordAction } from "../identity-actions";
+import { requestSignInCodeAction, signInWithPasswordAction } from "../identity-actions";
 import { AuthCard, FieldError, SubmitButton, inputClass, labelClass } from "../auth-card";
 import { Hidden, Notice, ProviderButtons, TextLink } from "../flow-ui";
 
@@ -34,7 +34,7 @@ const NOTICES: Record<string, string> = {
 export default async function SignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; next?: string; email?: string; notice?: string }>;
+  searchParams: Promise<{ error?: string; next?: string; email?: string; notice?: string; method?: string }>;
 }) {
   await connection();
   const params = await searchParams;
@@ -42,22 +42,54 @@ export default async function SignInPage({
   const error = params.error ? (ERRORS[params.error] ?? ERRORS.provider) : null;
   const notice = params.notice ? NOTICES[params.notice] : null;
 
+  const withPassword = params.method === "password";
+  const footer = (
+    <>
+      Invited and new here? <TextLink href={`/auth/sign-up${nextQuery(next)}`}>Create your sign-in</TextLink>
+    </>
+  );
+  const emailField = (
+    <>
+      <label htmlFor="email" className={labelClass}>Email</label>
+      <input id="email" name="email" type="email" autoComplete="username" required
+        defaultValue={params.email ?? ""} placeholder="you@company.com" className={inputClass} />
+    </>
+  );
+
+  // Code first: most sign-ins have no password, so a password box by default is
+  // a field people cannot fill. Password is one link away for those who set one.
+  if (!withPassword) {
+    return (
+      <AuthCard
+        title="Sign in"
+        intro="Enter your email and we'll send you a sign-in code. Your authenticator app is the second step."
+        footer={footer}
+      >
+        {notice ? <Notice>{notice}</Notice> : null}
+        <form action={requestSignInCodeAction}>
+          <Hidden name="next" value={next} />
+          {emailField}
+          {error ? <FieldError>{error}</FieldError> : null}
+          <SubmitButton>Email me a code</SubmitButton>
+        </form>
+        <div className="mt-4 text-sm">
+          <TextLink href={`/auth/sign-in?method=password${nextQuery(next, "&")}`}>Use a password instead</TextLink>
+        </div>
+        <ProviderButtons providers={configuredProviders()} next={next} />
+      </AuthCard>
+    );
+  }
+
   return (
     <AuthCard
-      title="Sign in"
-      intro="Sign in with your password, an emailed code, or your work account. Your authenticator app is always the second step."
-      footer={
-        <>
-          Invited and new here? <TextLink href={`/auth/sign-up${nextQuery(next)}`}>Create your sign-in</TextLink>
-        </>
-      }
+      title="Sign in with your password"
+      intro="Your authenticator app is the second step."
+      footer={footer}
     >
       {notice ? <Notice>{notice}</Notice> : null}
       <form action={signInWithPasswordAction}>
         <Hidden name="next" value={next} />
-        <label htmlFor="email" className={labelClass}>Email</label>
-        <input id="email" name="email" type="email" autoComplete="username" required
-          defaultValue={params.email ?? ""} placeholder="you@company.com" className={inputClass} />
+        {emailField}
         <label htmlFor="password" className={`${labelClass} mt-4`}>Password</label>
         <input id="password" name="password" type="password" autoComplete="current-password" required
           className={inputClass} />
@@ -65,7 +97,7 @@ export default async function SignInPage({
         <SubmitButton>Continue</SubmitButton>
       </form>
       <div className="mt-4 flex justify-between text-sm">
-        <TextLink href={`/auth/sign-in/code${nextQuery(next)}`}>Email me a code instead</TextLink>
+        <TextLink href={`/auth/sign-in${nextQuery(next)}`}>Email me a code instead</TextLink>
         <TextLink href="/auth/forgot-password">Forgot password?</TextLink>
       </div>
       <ProviderButtons providers={configuredProviders()} next={next} />

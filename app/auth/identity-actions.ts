@@ -78,13 +78,13 @@ export async function signInWithPasswordAction(form: FormData) {
   const next = safeNext(form.get("next"));
   const address = email.safeParse(form.get("email"));
   const secret = z.string().min(1).max(128).safeParse(form.get("password"));
-  if (!address.success || !secret.success) to("/auth/sign-in", { error: "invalid", next });
-  if (!(await allow("password", address.data))) to("/auth/sign-in", { error: "rate", next });
+  if (!address.success || !secret.success) to("/auth/sign-in", { method: "password", error: "invalid", next });
+  if (!(await allow("password", address.data))) to("/auth/sign-in", { method: "password", error: "rate", next });
 
   const result = await call((h) =>
     getAuth().api.signInEmail({ body: { email: address.data, password: secret.data }, headers: h }),
   );
-  if (!result.ok) to("/auth/sign-in", { error: "invalid", next });
+  if (!result.ok) to("/auth/sign-in", { method: "password", error: "invalid", next });
   to("/auth/mfa", { next });
 }
 
