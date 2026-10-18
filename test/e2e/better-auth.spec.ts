@@ -213,6 +213,7 @@ test("invited: emailed code → authenticator required → portal; then a passwo
 
   // Password sign-in: still the authenticator before the portal.
   await page.goto(`${APP}/dashboard`);
+  await page.getByRole("link", { name: "Use a password instead" }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
@@ -276,7 +277,6 @@ test("an existing account is not merged by address: it waits for an operator", a
   await sql("insert into memberships (user_id, organization_id, role) values ($1, $2, 'owner')", [user!.id, orgId]);
 
   await page.goto(`${APP}/dashboard`);
-  await page.getByRole("link", { name: "Email me a code instead" }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: "Email me a code" }).click();
   await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
@@ -350,7 +350,6 @@ test("a ticket works once: replaying the callback fails", async ({ page, context
     if (r.url().includes("/auth/sso/callback")) callback = r.url();
   });
   await page.goto(`${APP}/dashboard`);
-  await page.getByRole("link", { name: "Email me a code instead" }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: "Email me a code" }).click();
   await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
@@ -572,7 +571,6 @@ test("asking again sends the same code, which works on another device; the email
 
   // Start from a portal deep link, so sign-in is resuming a handoff.
   await page.goto(`${APP}/jobs`);
-  await page.getByRole("link", { name: "Email me a code instead" }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: "Email me a code" }).click();
   const first = await codeFor(email, "sign-in");
