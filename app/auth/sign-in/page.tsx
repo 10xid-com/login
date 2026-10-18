@@ -73,7 +73,7 @@ export default async function SignInPage({
           <SubmitButton>Email me a code</SubmitButton>
         </form>
         <div className="mt-4 text-sm">
-          <TextLink href={`/auth/sign-in?method=password${nextQuery(next, "&")}`}>Use a password instead</TextLink>
+          <TextLink href={`/auth/sign-in?method=password${params.email ? `&email=${encodeURIComponent(params.email)}` : ""}${nextQuery(next, "&")}`}>Use a password instead</TextLink>
         </div>
         <ProviderButtons providers={configuredProviders()} next={next} />
       </AuthCard>
