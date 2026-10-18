@@ -66,7 +66,8 @@ export default async function AccessPage({
         <SubmitButton>{status === "bound" ? "Continue" : "Check again"}</SubmitButton>
       </form>
       <form action={signOutAction} className="mt-3">
-        <SecondaryButton>Sign out</SecondaryButton>
+        <Hidden name="next" value={next} />
+        <SecondaryButton>{status === "bound" ? "Sign out" : "Sign out and switch account"}</SecondaryButton>
       </form>
     </AuthCard>
   );

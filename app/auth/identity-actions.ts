@@ -404,15 +404,22 @@ export async function revokeSessionAction(form: FormData) {
   to("/auth/account", { notice: "revoked" });
 }
 
-export async function signOutAction() {
+/**
+ * Sign out, and — when the form carries one — keep where the person was going,
+ * so "wrong account" is one click: sign out, sign in as the right address, and
+ * land where they meant to. `next` passes the same safeNext() allow-list as
+ * every other resume, so it cannot become an open redirect.
+ */
+export async function signOutAction(form?: FormData) {
   await assertLoginOrigin();
+  const next = safeNext(form?.get("next"));
   const current = await getLoginSession();
   if (current) {
     await revokePortalSessionsFromAuthSession(current.sessionId);
     await consumeTicketsForAuthSession(current.sessionId);
   }
   await call((h) => getAuth().api.signOut({ headers: h }));
-  to("/auth/sign-in", { notice: "signed-out" });
+  to("/auth/sign-in", { notice: next === "/" ? "signed-out" : "switch-account", next });
 }
 
 export async function signOutEverywhereAction() {
