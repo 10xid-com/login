@@ -886,6 +886,22 @@ describe("UiD pages sign in through the login host", () => {
   });
 });
 
+describe("no sign-in dead ends", () => {
+  test("a UiD the account can't open offers sign-out-and-switch, keeping the destination", async () => {
+    const { readFileSync } = await import("node:fs");
+    const route = readFileSync("app/auth/uid/authorize/route.ts", "utf8");
+    expect(route).toContain('here("/auth/uid/denied")');
+    expect(route).not.toContain("Sign out and use the address that can");
+
+    const page = readFileSync("app/auth/uid/denied/page.tsx", "utf8");
+    expect(page).toContain("Sign out and switch account");
+    expect(page).toContain('<Hidden name="next" value={next} />');
+
+    const actions = readFileSync("app/auth/identity-actions.ts", "utf8");
+    expect(actions).toContain('const next = safeNext(form?.get("next"));');
+  });
+});
+
 describe("where sign-in may resume", () => {
   test("only a handoff (the portal's or a UiD's) or the account page; everything else is home", () => {
     expect(safeNext("/auth/sso/authorize?site=x&state=y")).toBe("/auth/sso/authorize?site=x&state=y");

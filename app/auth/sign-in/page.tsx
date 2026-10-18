@@ -23,6 +23,7 @@ const NOTICES: Record<string, string> = {
   verified: "Your address is confirmed. Sign in to continue.",
   reset: "Your password has been changed and every session signed out. Sign in with the new one.",
   "signed-out": "You are signed out.",
+  "switch-account": "You are signed out. Sign in with the address that has access, and you will go straight back to where you were going.",
   "signed-out-everywhere": "You are signed out on every device.",
 };
 

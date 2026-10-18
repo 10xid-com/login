@@ -38,10 +38,11 @@ export async function GET(request: NextRequest) {
   const account = await userByAuthUserId(session.user.id);
   if (!account) return here("/auth/access");
   if (!mayOpenUid(uid, account.email)) {
-    return new NextResponse(`${account.email} can't open ${uid}. Sign out and use the address that can.`, {
-      status: 403,
-      headers: { "Cache-Control": "no-store" },
-    });
+    // Never a dead end: a page that offers "Sign out and switch account" and
+    // brings the person back here once they are signed in as the right address.
+    const denied = here("/auth/uid/denied");
+    denied.headers.set("Cache-Control", "no-store");
+    return denied;
   }
 
   const token = secretToken(32);

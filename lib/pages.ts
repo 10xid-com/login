@@ -206,6 +206,17 @@ export const PAGES: PageRecord[] = [
     file: "app/auth/access/page.tsx",
     group: "Getting in",
   },
+  {
+    id: "login.uid-switch-account",
+    path: "/auth/uid/denied",
+    name: "Switch account",
+    purpose:
+      "Signed in as an address that may not open a UiD page: one button signs out and comes back to that UiD once the right address signs in. Never a dead end.",
+    audience: "public",
+    kind: "page",
+    file: "app/auth/uid/denied/page.tsx",
+    group: "Getting in",
+  },
   /* -------------------------------------------------------------- */
   /* The work                                                        */
   /* -------------------------------------------------------------- */
