@@ -939,7 +939,7 @@ describe("history and approvals", () => {
       await fails(
         `update inventory_purchase_intents set status = 'approved', approved_by = $2, approved_at = now() where id = $1`,
         [intent, agent],
-        /approved by a person who belongs to this business/,
+        /approved by the person approving it, who belongs to this business/,
       );
       await fails(
         `update inventory_purchase_intents set status = 'in_cart', carted_at = now() where id = $1`,
@@ -960,6 +960,542 @@ describe("history and approvals", () => {
         { action: "inventory.purchase.approved", actor_user_id: user },
         { action: "inventory.purchase.in_cart", actor_user_id: agent },
       ]);
+    });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Review of 7714b8f                                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Codex reviewed the first draft (commit 7714b8f) and reproduced each of these
+ * against it in a disposable PostgreSQL 18.6. Every test in this section fails
+ * on that commit; they are what the revision is held to.
+ */
+
+/** A lot of the product with a best-before date `days` from today. */
+async function lotExpiringIn(productId: string, days: number) {
+  return (await one(
+    `insert into inventory_lots (organization_id, product_id, expiry_kind, expiry_date)
+     values (${ORG}, $1, 'best_before', current_date + $2::int) returning id`,
+    [productId, days],
+  )).id as string;
+}
+
+/** A sealed package in that lot, catalogued at its label weight. */
+async function sealedIn(lotId: string, grams: number) {
+  const c = await container(lotId, "sealed", grams);
+  await move(c, "opening", grams, "labelled_unopened");
+  return c;
+}
+
+/** A sealed package of its own single-material product. */
+async function sealedStock(materialId: string, grams: number) {
+  return sealedIn(await lot(await product(`Stocked ${tag()}`, materialId, grams)), grams);
+}
+
+/** An active formulation: 1 g of the material per serving. */
+async function oneGramRecipe(materialId: string) {
+  const f = (await one(
+    `insert into inventory_formulations (organization_id, name) values (${ORG}, $1) returning id`,
+    [`Recipe ${tag()}`],
+  )).id;
+  const v = (await one(
+    `insert into inventory_formulation_versions (organization_id, formulation_id, label) values (${ORG}, $1, 'v1') returning id`,
+    [f],
+  )).id as string;
+  await q(
+    `insert into inventory_formulation_lines (organization_id, version_id, material_id, quantity, unit) values (${ORG}, $1, $2, 1, 'g')`,
+    [v, materialId],
+  );
+  await q(`update inventory_formulation_versions set status = 'active' where id = $1`, [v]);
+  return v;
+}
+
+/** A plan for `grams` servings of that recipe, `days` from today. */
+async function planIn(versionId: string, days: number, grams: number) {
+  return (await one(
+    `insert into inventory_batch_plans (organization_id, version_id, planned_for, servings)
+     values (${ORG}, $1, current_date + $2::int, $3) returning id`,
+    [versionId, days, grams],
+  )).id as string;
+}
+
+/** An order placed with a vendor, expected `days` from today, for grams of a product. */
+async function onOrder(productId: string, grams: number, days: number | null) {
+  const seller = await vendor(`Vendor ${tag()}`);
+  const order = (await one(
+    `insert into inventory_orders (organization_id, vendor_id, order_number, expected_on, status)
+     values (${ORG}, $1, $2, current_date + $3::int, 'placed') returning id`,
+    [seller.businessId, `R-${tag()}`, days],
+  )).id as string;
+  await q(
+    `insert into inventory_order_lines (organization_id, order_id, description, product_id, packages, package_quantity, package_unit)
+     values (${ORG}, $1, 'on order', $2, 1, $3, 'g')`,
+    [order, productId, grams],
+  );
+  return order;
+}
+
+async function requirementOf(planId: string, materialId: string) {
+  const r = await one(
+    `select required, shortfall, allocated_from_stock, allocated_from_incoming
+       from inventory_plan_requirements where plan_id = $1 and material_id = $2`,
+    [planId, materialId],
+  );
+  return {
+    required: num(r.required),
+    shortfall: num(r.shortfall),
+    fromStock: num(r.allocated_from_stock),
+    fromIncoming: num(r.allocated_from_incoming),
+  };
+}
+
+async function shortfallOf(planId: string, materialId: string) {
+  return num((await one(
+    `select shortfall from inventory_plan_requirements where plan_id = $1 and material_id = $2`,
+    [planId, materialId],
+  )).shortfall);
+}
+
+async function reservationState(planId: string) {
+  const r = await one(
+    `select reserved_for_plan, reserved_valid, reserved_unbacked, reservations_to_review
+       from inventory_plan_requirements where plan_id = $1`,
+    [planId],
+  );
+  return {
+    reserved: num(r.reserved_for_plan),
+    valid: num(r.reserved_valid),
+    unbacked: num(r.reserved_unbacked),
+    review: num(r.reservations_to_review),
+  };
+}
+
+const RESERVE = `insert into inventory_reservations (organization_id, plan_id, container_id, material_id, quantity, unit)
+                 values (${ORG}, $1, $2, $3, $4, $5) returning id`;
+
+async function reserve(planId: string, containerId: string, materialId: string, quantity: number, unit = "g") {
+  return (await one(RESERVE, [planId, containerId, materialId, quantity, unit])).id as string;
+}
+
+describe("review of 7714b8f: reservations", () => {
+  test("R1 a reservation counts only while its jar can give that plan the stock: a hold or an expiry after reserving undoes it", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const fx = await planningFixture(user);
+      await reserve(fx.plan200, fx.stock, fx.m, 200);
+      expect(await totalShortfall(fx.m)).toBe(80);
+
+      // The reserved jar goes on hold: it gives nothing, to any plan.
+      const stockLot = (await one(`select lot_id from inventory_containers where id = $1`, [fx.stock])).lot_id;
+      await q(`update inventory_lots set hold = 'quarantine', hold_reason = 'damp' where id = $1`, [stockLot]);
+      expect(await totalShortfall(fx.m)).toBe(300); // 350 g needed, only the 50 g delivery usable
+      expect(await shortfallOf(fx.plan200, fx.m)).toBeGreaterThan(0);
+      expect(await reservationState(fx.plan200)).toEqual({ reserved: 200, valid: 0, unbacked: 200, review: 1 });
+
+      // Off hold, but best before day 10 and the plans are on day 14: still nothing.
+      await q(
+        `update inventory_lots set hold = 'none', hold_reason = null, expiry_kind = 'best_before', expiry_date = current_date + 10
+          where id = $1`,
+        [stockLot],
+      );
+      expect(await totalShortfall(fx.m)).toBe(300);
+      expect(await reservationState(fx.plan200)).toEqual({ reserved: 200, valid: 0, unbacked: 200, review: 1 });
+
+      // The plan moves to day 9, before the date: the reservation holds again.
+      await q(`update inventory_batch_plans set planned_for = current_date + 9 where id = $1`, [fx.plan200]);
+      expect(await reservationState(fx.plan200)).toEqual({ reserved: 200, valid: 200, unbacked: 0, review: 0 });
+      expect(await shortfallOf(fx.plan200, fx.m)).toBe(0);
+      // The other 20 g expire before day 14, so the 50 g delivery is all the later plan has.
+      expect(await shortfallOf(fx.plan150, fx.m)).toBe(100);
+    });
+  });
+
+  test("R1 a reservation that cannot be honoured is refused: more than the jar holds across plans, unknown amount, on hold, expired by the plan, another material, ml of a weighed material, a closed plan", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const fx = await planningFixture(user);
+
+      // 220 g in the jar: 200 g for one plan, then 100 g more for the other is too much.
+      await reserve(fx.plan200, fx.stock, fx.m, 200);
+      await fails(RESERVE, [fx.plan150, fx.stock, fx.m, 100, "g"], /already reserved/);
+      await reserve(fx.plan150, fx.stock, fx.m, 20); // exactly what is left
+
+      const unknownJar = await container(await lot(fx.p), "open", 1000);
+      await move(unknownJar, "opening", null, "unknown");
+      await fails(RESERVE, [fx.plan150, unknownJar, fx.m, 10, "g"], /unknown/);
+
+      const heldJar = await sealedIn(await lot(fx.p, { hold: "review" }), 100);
+      await fails(RESERVE, [fx.plan150, heldJar, fx.m, 10, "g"], /on hold/);
+
+      const oldJar = await sealedIn(await lotExpiringIn(fx.p, 5), 100);
+      await fails(RESERVE, [fx.plan150, oldJar, fx.m, 10, "g"], /expires before/);
+
+      const other = await material("Unplanned powder");
+      const otherJar = await sealedStock(other, 100);
+      await fails(RESERVE, [fx.plan150, otherJar, fx.m, 10, "g"], /not recorded as holding/);
+      await fails(RESERVE, [fx.plan150, otherJar, other, 10, "g"], /does not use/);
+
+      const freshJar = await sealedIn(await lot(fx.p), 100);
+      await fails(RESERVE, [fx.plan150, freshJar, fx.m, 10, "ml"], /counted by mass/);
+
+      await q(`update inventory_batch_plans set status = 'cancelled' where id = $1`, [fx.plan150]);
+      await fails(RESERVE, [fx.plan150, freshJar, fx.m, 10, "g"], /open plan/);
+    });
+  });
+
+  test("R1 reservations are checked again on every read: a loss after reserving, or an amount that becomes unknown, shows as short and to review", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const fx = await planningFixture(user);
+      await reserve(fx.plan200, fx.stock, fx.m, 200);
+      await reserve(fx.plan150, fx.stock, fx.m, 20);
+      expect(await totalShortfall(fx.m)).toBe(80);
+
+      // 50 g lost after reserving: 170 g left against 220 g of reservations. The first reservation is served first.
+      await move(fx.stock, "loss", -50, "estimated", { note: "spilt" });
+      expect(await totalShortfall(fx.m)).toBe(130); // 350 g needed, 170 g in the jar, 50 g arriving
+      expect(await reservationState(fx.plan200)).toEqual({ reserved: 200, valid: 170, unbacked: 30, review: 1 });
+      expect(await reservationState(fx.plan150)).toEqual({ reserved: 20, valid: 0, unbacked: 20, review: 1 });
+
+      // A jar whose estimate is withdrawn after reserving from it is unknown again, and gives nothing.
+      const jar = await container(await lot(fx.p), "open", 1000);
+      await move(jar, "opening", null, "unknown");
+      const estimate = await move(jar, "count", 300, "estimated");
+      await reserve(fx.plan150, jar, fx.m, 100);
+      expect((await reservationState(fx.plan150)).valid).toBe(100);
+      await move(jar, "reversal", null, null, { reverses_id: estimate, note: "that estimate was for another jar" });
+      expect(await reservationState(fx.plan150)).toEqual({ reserved: 120, valid: 0, unbacked: 120, review: 2 });
+    });
+  });
+});
+
+describe("review of 7714b8f: planning across expiry dates and deliveries", () => {
+  test("R2 stock expiring between two plans is used by the earlier one: 200 g on day 7 and 150 g on day 14, from 200 g best before day 10 and 150 g best before day 20, is nothing short", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const m = await material("Expiring powder");
+      const p = await product("Expiring powder bulk", m, 1000);
+      await sealedIn(await lotExpiringIn(p, 10), 200);
+      await sealedIn(await lotExpiringIn(p, 20), 150);
+      const v = await oneGramRecipe(m);
+      const early = await planIn(v, 7, 200);
+      const late = await planIn(v, 14, 150);
+      expect(await totalShortfall(m)).toBe(0);
+      expect(await requirementOf(early, m)).toEqual({ required: 200, shortfall: 0, fromStock: 200, fromIncoming: 0 });
+      expect(await requirementOf(late, m)).toEqual({ required: 150, shortfall: 0, fromStock: 150, fromIncoming: 0 });
+    });
+  });
+
+  test("R2 staggered deliveries: a delivery covers the plans on or after its expected day, after the expiring stock is used", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const m = await material("Staggered powder");
+      const p = await product("Staggered powder bulk", m, 1000);
+      await sealedIn(await lotExpiringIn(p, 10), 200); // 200 g, best before day 10
+      await onOrder(p, 200, 12); // 200 g expected day 12
+      const v = await oneGramRecipe(m);
+      const first = await planIn(v, 7, 200);
+      const second = await planIn(v, 14, 200);
+      expect(await totalShortfall(m)).toBe(0);
+      expect(await requirementOf(first, m)).toEqual({ required: 200, shortfall: 0, fromStock: 200, fromIncoming: 0 });
+      expect(await requirementOf(second, m)).toEqual({ required: 200, shortfall: 0, fromStock: 0, fromIncoming: 200 });
+    });
+  });
+
+  test("R2 a delivery after a plan's date helps only later plans, and is counted once", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const m = await material("Late powder");
+      const p = await product("Late powder bulk", m, 1000);
+      await sealedIn(await lot(p), 100); // 100 g, no date
+      await onOrder(p, 200, 10); // 200 g expected day 10
+      const v = await oneGramRecipe(m);
+      const a = await planIn(v, 7, 300);
+      const b = await planIn(v, 14, 200);
+      expect(await totalShortfall(m)).toBe(200);
+      expect(await requirementOf(a, m)).toEqual({ required: 300, shortfall: 200, fromStock: 100, fromIncoming: 0 });
+      expect(await requirementOf(b, m)).toEqual({ required: 200, shortfall: 0, fromStock: 0, fromIncoming: 200 });
+    });
+  });
+
+  test("R2 a requirement that cannot be counted is refused or shown as unknown, never quietly smaller", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const m = await material("Dosed powder");
+      const f = (await one(`insert into inventory_formulations (organization_id, name) values (${ORG}, 'Dosed blend') returning id`)).id;
+      const v = (await one(
+        `insert into inventory_formulation_versions (organization_id, formulation_id, label) values (${ORG}, $1, 'v1') returning id`,
+        [f],
+      )).id;
+      const LINE = `insert into inventory_formulation_lines (organization_id, version_id, material_id, quantity, unit, role)
+                    values (${ORG}, $1, $2, 5, $3, $4)`;
+      await fails(LINE, [v, m, "iu", "batch"], /cannot be counted against this material/);
+      await fails(LINE, [v, m, "ml", "required_addition"], /cannot be counted against this material/);
+      await q(LINE, [v, m, "g", "batch"]);
+      await q(`update inventory_formulation_versions set status = 'active' where id = $1`, [v]);
+      const plan = await planIn(v, 14, 20); // 20 servings of 5 g
+      await sealedStock(m, 50);
+      expect(await requirementOf(plan, m)).toMatchObject({ required: 100, shortfall: 50 });
+
+      // Re-described as measured by volume, the grams in the recipe no longer count against it: unknown, not zero.
+      await q(`update inventory_materials set dimension = 'volume' where id = $1`, [m]);
+      expect(await requirementOf(plan, m)).toMatchObject({ required: null, shortfall: null });
+    });
+  });
+});
+
+describe("review of 7714b8f: purchase approval", () => {
+  /** A proposal for 1 package at 5.00 CAD, made by the business's agent (a service account). */
+  async function proposal() {
+    const { org, user } = await business();
+    const agent = (await one(
+      `insert into users (email, full_name, is_service) values ($1, 'Inventory agent', true) returning id`,
+      [`agent-${tag()}@service.invalid`],
+    )).id as string;
+    await q(`insert into memberships (user_id, organization_id, role) values ($1, $2, 'member')`, [agent, org]);
+    await asApp(org, agent);
+    const p = await product("Proposed powder", await material("Proposed powder"), 100);
+    const seller = await vendor("Proposal vendor");
+    const offer = (await one(
+      `insert into inventory_offers (organization_id, vendor_id, product_id, package_quantity, package_unit, price, stock_status)
+       values (${ORG}, $1, $2, 100, 'g', 5, 'in_stock') returning id`,
+      [seller.businessId, p],
+    )).id as string;
+    const otherOffer = (await one(
+      `insert into inventory_offers (organization_id, vendor_id, product_id, package_quantity, package_unit, price, stock_status)
+       values (${ORG}, $1, $2, 1000, 'g', 40, 'in_stock') returning id`,
+      [seller.businessId, p],
+    )).id as string;
+    const intent = (await one(
+      `insert into inventory_purchase_intents (organization_id, offer_id, packages, expected_total, proposed_by, idempotency_key)
+       values (${ORG}, $1, 1, 5, $2, $3) returning id`,
+      [offer, agent, `proposal-${tag()}`],
+    )).id as string;
+    return { org, user, agent, offer, otherOffer, intent };
+  }
+
+  test("R3 the agent cannot approve in a person's name: an approval is by whoever is acting, a person of the business, at the database's time", async () => {
+    await inRollback(async () => {
+      const fx = await proposal(); // acting as the agent
+      await fails(
+        `update inventory_purchase_intents set status = 'approved', approved_by = $2, approved_at = now() where id = $1`,
+        [fx.intent, fx.user],
+        /approved by the person approving it/,
+      );
+      await fails(`update inventory_purchase_intents set approved_by = $2 where id = $1`, [fx.intent, fx.user], /recorded once, by the approval/);
+      await fails(
+        `insert into inventory_purchase_intents (organization_id, offer_id, packages, status, approved_by, approved_at)
+         values (${ORG}, $1, 1, 'approved', $2, now())`,
+        [fx.offer, fx.user],
+        /approved by the person approving it/,
+      );
+
+      await asApp(fx.org, fx.user);
+      await q(
+        `update inventory_purchase_intents set status = 'approved', approved_by = $2, approved_at = '2000-01-01' where id = $1`,
+        [fx.intent, fx.user],
+      );
+      const row = await one(
+        `select approved_by, approved_at > now() - interval '1 minute' as recent from inventory_purchase_intents where id = $1`,
+        [fx.intent],
+      );
+      expect(row).toEqual({ approved_by: fx.user, recent: true });
+    });
+  });
+
+  test("R3 the terms are frozen once approved, and an approval cannot change them; a revision before approval is audited", async () => {
+    await inRollback(async () => {
+      const fx = await proposal();
+      await q(`update inventory_purchase_intents set packages = 2, expected_total = 10 where id = $1`, [fx.intent]);
+
+      await asApp(fx.org, fx.user);
+      await fails(
+        `update inventory_purchase_intents set status = 'approved', approved_by = $2, packages = 3 where id = $1`,
+        [fx.intent, fx.user],
+        /on the terms as proposed/,
+      );
+      await q(`update inventory_purchase_intents set status = 'approved', approved_by = $2 where id = $1`, [fx.intent, fx.user]);
+
+      await asApp(fx.org, fx.agent);
+      const FROZEN = /keeps the terms it was approved on/;
+      await fails(`update inventory_purchase_intents set packages = 100 where id = $1`, [fx.intent], FROZEN);
+      await fails(`update inventory_purchase_intents set expected_total = 500 where id = $1`, [fx.intent], FROZEN);
+      await fails(`update inventory_purchase_intents set currency = 'USD' where id = $1`, [fx.intent], FROZEN);
+      await fails(`update inventory_purchase_intents set offer_id = $2 where id = $1`, [fx.intent, fx.otherOffer], FROZEN);
+      await asApp(fx.org, fx.user);
+      await fails(`update inventory_purchase_intents set packages = 100 where id = $1`, [fx.intent], FROZEN);
+      await fails(`update inventory_purchase_intents set approved_by = $2 where id = $1`, [fx.intent, fx.agent], /recorded once, by the approval/);
+
+      await asApp(fx.org, fx.agent);
+      await q(`update inventory_purchase_intents set status = 'in_cart', carted_at = now(), cart_reference = 'cart-1' where id = $1`, [fx.intent]);
+      await fails(`update inventory_purchase_intents set packages = 100 where id = $1`, [fx.intent], FROZEN);
+
+      const row = await one(`select packages, expected_total, currency, offer_id from inventory_purchase_intents where id = $1`, [fx.intent]);
+      expect([num(row.packages), num(row.expected_total), row.currency, row.offer_id]).toEqual([2, 10, "CAD", fx.offer]);
+      const audit = await q(`select action, actor_user_id from audit_events where target = $1 order by id`, [`inventory_purchase_intents:${fx.intent}`]);
+      expect(audit).toEqual([
+        { action: "inventory.purchase.proposed", actor_user_id: fx.agent },
+        { action: "inventory.purchase.revised", actor_user_id: fx.agent },
+        { action: "inventory.purchase.approved", actor_user_id: fx.user },
+        { action: "inventory.purchase.in_cart", actor_user_id: fx.agent },
+      ]);
+    });
+  });
+});
+
+describe("review of 7714b8f: weighing evidence", () => {
+  const WEIGH = `insert into inventory_measurements (organization_id, container_id, gross_g, tare_g, tare_basis, net_g, method, confidence)
+                 values (${ORG}, $1, $2, $3, $4, $5, $6, $7) returning id`;
+  const MEASURED = `insert into inventory_movements (organization_id, container_id, kind, quantity, unit, basis, measurement_id)
+                    values (${ORG}, $1, $2, $3, $4, 'measured', $5)`;
+
+  test("R4 a visual or rough figure, a label or an estimated tare is never a measured amount", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const c = await container(await lot(await product("Eyeballed powder", await material("Eyeballed powder"))), "open");
+      await move(c, "opening", null, "unknown");
+
+      const eyeballed = (await one(WEIGH, [c, null, null, null, 90, "visual_estimate", "rough"])).id;
+      await fails(MEASURED, [c, "count", 90, "g", eyeballed], /exact scale weighing/);
+      await move(c, "count", 90, "estimated", { measurement_id: eyeballed });
+      expect(await balanceOf(c)).toEqual({ balance: 90, basis: "estimated" });
+
+      const guessedTare = (await one(WEIGH, [c, 330, 30, "estimated", 300, "scale", "exact"])).id;
+      await fails(MEASURED, [c, "count", 300, "g", guessedTare], /exact scale weighing/);
+      const fromLabel = (await one(WEIGH, [c, null, null, null, 300, "label", "exact"])).id;
+      await fails(MEASURED, [c, "count", 300, "g", fromLabel], /exact scale weighing/);
+      const roughScale = (await one(WEIGH, [c, null, null, null, 300, "scale", "rough"])).id;
+      await fails(MEASURED, [c, "count", 300, "g", roughScale], /exact scale weighing/);
+      expect(await balanceOf(c)).toEqual({ balance: 90, basis: "estimated" });
+
+      const weighed = (await one(WEIGH, [c, 330, 30, "measured", 300, "scale", "exact"])).id;
+      await q(MEASURED, [c, "count", 0.3, "kg", weighed]);
+      expect(await balanceOf(c)).toEqual({ balance: 300, basis: "measured" });
+    });
+  });
+
+  test("R4 a weighing never measures millilitres or items", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const l = await lot(await product("Measured syrup", await material("Measured syrup")));
+      const bottle = (await one(
+        `insert into inventory_containers (organization_id, lot_id, status, dimension) values (${ORG}, $1, 'open', 'volume') returning id`,
+        [l],
+      )).id;
+      const bottleWeighing = (await one(WEIGH, [bottle, null, null, null, 100, "scale", "exact"])).id;
+      await fails(MEASURED, [bottle, "opening", 100, "ml", bottleWeighing], /weighing measures grams/);
+      const tub = (await one(
+        `insert into inventory_containers (organization_id, lot_id, status, dimension) values (${ORG}, $1, 'open', 'count') returning id`,
+        [l],
+      )).id;
+      const tubWeighing = (await one(WEIGH, [tub, null, null, null, 100, "scale", "exact"])).id;
+      await fails(MEASURED, [tub, "opening", 100, "count", tubWeighing], /weighing measures grams/);
+      expect(await balanceOf(bottle)).toEqual({ balance: null, basis: "unknown" });
+    });
+  });
+
+  test("R4 a weighing a stock event rests on cannot be edited or removed, by the portal or the owner; a correction is a new weighing and count", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const c = await container(await lot(await product("Evidence powder", await material("Evidence powder"))), "open");
+      await move(c, "opening", null, "unknown");
+      const weighed = (await one(WEIGH, [c, 330, 30, "measured", 300, "scale", "exact"])).id;
+      await q(MEASURED, [c, "count", 300, "g", weighed]);
+
+      await fails(`update inventory_measurements set net_g = 40, gross_g = 70 where id = $1`, [weighed], /permission denied/);
+      await fails(`delete from inventory_measurements where id = $1`, [weighed], /permission denied/);
+      const spare = (await one(WEIGH, [c, null, null, null, 10, "visual_estimate", "rough"])).id;
+      await fails(`update inventory_measurements set net_g = 20 where id = $1`, [spare], /permission denied/);
+
+      await asOwner();
+      await fails(`update inventory_measurements set net_g = 40, gross_g = 70 where id = $1`, [weighed], /evidence for a stock event/);
+      await fails(`delete from inventory_measurements where id = $1`, [weighed], /evidence for a stock event/);
+
+      await asApp(org, user);
+      expect(await balanceOf(c)).toEqual({ balance: 300, basis: "measured" });
+      const reweighed = (await one(WEIGH, [c, 320, 30, "measured", 290, "scale", "exact"])).id;
+      await q(MEASURED, [c, "count", 290, "g", reweighed]);
+      expect(await balanceOf(c)).toEqual({ balance: 290, basis: "measured" });
+    });
+  });
+
+  test("R4 a label amount is the package's nominal contents, in any unit of the same kind", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const l = await lot(await product("Labelled powder", await material("Labelled powder"), 500));
+      const LABELLED = `insert into inventory_movements (organization_id, container_id, kind, quantity, unit, basis)
+                        values (${ORG}, $1, 'opening', $2, $3, 'labelled_unopened')`;
+      const jar = await container(l, "sealed", 500);
+      await fails(LABELLED, [jar, 450, "g"], /nominal contents/);
+      const unlabelled = await container(l, "sealed");
+      await fails(LABELLED, [unlabelled, 500, "g"], /nominal contents/);
+      await q(LABELLED, [jar, 0.5, "kg"]);
+      expect(await balanceOf(jar)).toEqual({ balance: 500, basis: "labelled_unopened" });
+    });
+  });
+});
+
+describe("review of 7714b8f: one photo, several jars", () => {
+  test("R5 one label photo is evidence for two captures and two jars; each link is made once; one capture creates a container", async () => {
+    await inRollback(async () => {
+      const { org, user } = await business();
+      await asApp(org, user);
+      const l = await lot(await product("Twin jars", await material("Twin jars"), 250));
+      const capture = async () =>
+        (await one(`insert into inventory_captures (organization_id, created_by) values (${ORG}, $1) returning id`, [user])).id as string;
+      const [first, second] = [await capture(), await capture()];
+      const photo = (await one(
+        `insert into inventory_documents (organization_id, capture_id, kind, content_type, storage_key, byte_size, sha256, uploaded_by, state)
+         values (${ORG}, $1, 'photo', 'image/jpeg', $2, 1000, decode($3, 'hex'), $4, 'stored') returning id`,
+        [first, `inventory/${org}/${randomBytes(18).toString("base64url")}.jpg`, randomBytes(32).toString("hex"), user],
+      )).id;
+      const LINK = `insert into inventory_document_links (organization_id, document_id, capture_id, container_id)
+                    values (${ORG}, $1, $2, $3)`;
+      await q(LINK, [photo, first, null]);
+      await q(LINK, [photo, second, null]);
+      await fails(LINK, [photo, first, null], /inventory_document_links_once/);
+      expect(await q(`${LINK} on conflict do nothing returning 1`, [photo, first, null])).toHaveLength(0);
+
+      const confirm = async (captureId: string, containerId: string, outcome: string) =>
+        q(
+          `update inventory_captures set status = 'confirmed', container_id = $2, outcome = $3, confirmed_by = $4, confirmed_at = now()
+            where id = $1`,
+          [captureId, containerId, outcome, user],
+        );
+      const [jar1, jar2] = [await container(l, "sealed", 250), await container(l, "sealed", 250)];
+      await confirm(first, jar1, "new_container");
+      await confirm(second, jar2, "new_container");
+      await q(LINK, [photo, null, jar1]);
+      await q(LINK, [photo, null, jar2]);
+
+      // A third capture of the first jar can confirm it as existing, never as newly created.
+      const third = await capture();
+      await fails(
+        `update inventory_captures set status = 'confirmed', container_id = $2, outcome = 'new_container', confirmed_by = $3, confirmed_at = now() where id = $1`,
+        [third, jar1, user],
+        /inventory_captures_one_creator/,
+      );
+      await confirm(third, jar1, "existing_container");
+
+      const links = await one(
+        `select count(capture_id)::int as captures, count(container_id)::int as containers from inventory_document_links where document_id = $1`,
+        [photo],
+      );
+      expect(links).toEqual({ captures: 2, containers: 2 });
     });
   });
 });

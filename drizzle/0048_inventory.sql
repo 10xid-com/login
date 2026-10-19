@@ -1035,6 +1035,13 @@ CREATE TRIGGER "inventory_captures_rules"
 
 --> statement-breakpoint
 
+-- One capture created each container. Later captures of the same jar confirm
+-- it as `existing_container`; none can claim to have made it.
+CREATE UNIQUE INDEX IF NOT EXISTS "inventory_captures_one_creator"
+  ON "inventory_captures" ("organization_id", "container_id") WHERE "outcome" = 'new_container';
+
+--> statement-breakpoint
+
 -- ===========================================================================
 -- 6. EVIDENCE: PHOTOS, DOCUMENTS, EXTRACTION AND REVIEW
 -- ===========================================================================
@@ -1044,6 +1051,12 @@ CREATE TRIGGER "inventory_captures_rules"
 -- file uploaded twice by one business is one document (by content hash). The
 -- row exists from the moment an upload starts, so a dropped connection leaves
 -- a `pending` row to finish or retry rather than nothing.
+--
+-- The hash identifies a FILE, not a jar. One photo of a label can be evidence
+-- for several captures and several containers — two identical jars shot once
+-- — so what a document belongs to is its links (inventory_document_links),
+-- including the captures it was used in. `capture_id` here only records the
+-- capture it was first uploaded in.
 --
 -- Text inside a photo is evidence, never an instruction.
 CREATE TABLE IF NOT EXISTS "inventory_documents" (
@@ -1082,13 +1095,15 @@ CREATE INDEX IF NOT EXISTS "inventory_documents_capture_idx" ON "inventory_docum
 
 --> statement-breakpoint
 
--- What a document is evidence OF: a product's label, a lot's date, a
--- container's weighing, an order's invoice. One document can support several
--- records and one record can have many documents; each link names one record.
+-- What a document is evidence OF: a capture's photos, a product's label, a
+-- lot's date, a container's weighing, an order's invoice. One document can
+-- support several records and one record can have many documents; each link
+-- names one record, once.
 CREATE TABLE IF NOT EXISTS "inventory_document_links" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "organization_id" uuid NOT NULL REFERENCES "organizations"("id"),
   "document_id" uuid NOT NULL,
+  "capture_id" uuid,
   "product_id" uuid,
   "lot_id" uuid,
   "container_id" uuid,
@@ -1099,6 +1114,8 @@ CREATE TABLE IF NOT EXISTS "inventory_document_links" (
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   CONSTRAINT "inventory_document_links_document" FOREIGN KEY ("organization_id", "document_id")
     REFERENCES "inventory_documents" ("organization_id", "id") ON DELETE CASCADE,
+  CONSTRAINT "inventory_document_links_capture" FOREIGN KEY ("organization_id", "capture_id")
+    REFERENCES "inventory_captures" ("organization_id", "id") ON DELETE CASCADE,
   CONSTRAINT "inventory_document_links_product" FOREIGN KEY ("organization_id", "product_id")
     REFERENCES "inventory_products" ("organization_id", "id") ON DELETE CASCADE,
   CONSTRAINT "inventory_document_links_lot" FOREIGN KEY ("organization_id", "lot_id")
@@ -1111,12 +1128,23 @@ CREATE TABLE IF NOT EXISTS "inventory_document_links" (
     REFERENCES "inventory_businesses" ("organization_id", "id") ON DELETE CASCADE,
   CONSTRAINT "inventory_document_links_offer" FOREIGN KEY ("organization_id", "offer_id")
     REFERENCES "inventory_offers" ("organization_id", "id") ON DELETE CASCADE,
-  CONSTRAINT "inventory_document_links_one_target" CHECK (num_nonnulls("product_id", "lot_id", "container_id", "order_id", "business_id", "offer_id") = 1)
+  CONSTRAINT "inventory_document_links_one_target" CHECK (
+    num_nonnulls("capture_id", "product_id", "lot_id", "container_id", "order_id", "business_id", "offer_id") = 1
+  ),
+  -- Linking is idempotent: a retried upload or confirmation finds its link.
+  CONSTRAINT "inventory_document_links_once" UNIQUE NULLS NOT DISTINCT (
+    "organization_id", "document_id", "capture_id", "product_id", "lot_id", "container_id", "order_id", "business_id", "offer_id"
+  )
 );
 
 --> statement-breakpoint
 
 CREATE INDEX IF NOT EXISTS "inventory_document_links_document_idx" ON "inventory_document_links" ("organization_id", "document_id");
+
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "inventory_document_links_capture_idx"
+  ON "inventory_document_links" ("organization_id", "capture_id") WHERE "capture_id" IS NOT NULL;
 
 --> statement-breakpoint
 
@@ -1229,6 +1257,12 @@ CREATE TABLE IF NOT EXISTS "inventory_match_candidates" (
 -- difference. When the tare is missing, net is unknown unless explicitly
 -- estimated — and even then it can never equal the gross, which is how a gross
 -- figure gets mistaken for contents.
+--
+-- A weighing is evidence. The portal can record one but never change or remove
+-- it, and once a stock event rests on it nobody can (inventory_measurements_rules):
+-- a correction is a new weighing and a new count. Only an exact scale weighing
+-- whose tare, if any, was weighed too can make an amount 'measured' — see the
+-- ledger's rules.
 CREATE TABLE IF NOT EXISTS "inventory_measurements" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "organization_id" uuid NOT NULL REFERENCES "organizations"("id"),
@@ -1267,6 +1301,38 @@ CREATE TABLE IF NOT EXISTS "inventory_measurements" (
   CONSTRAINT "inventory_measurements_method" CHECK ("method" IN ('scale', 'label', 'visual_estimate', 'calculated')),
   CONSTRAINT "inventory_measurements_confidence" CHECK ("confidence" IN ('exact', 'estimated', 'rough'))
 );
+
+--> statement-breakpoint
+
+CREATE OR REPLACE FUNCTION "inventory_measurements_rules"() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM inventory_movements m
+     WHERE m.organization_id = OLD.organization_id AND m.measurement_id = OLD.id
+  ) THEN
+    RAISE EXCEPTION 'That weighing is evidence for a stock event and cannot be changed or removed. Record a new weighing and a new count.'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+--> statement-breakpoint
+
+DROP TRIGGER IF EXISTS "inventory_measurements_rules" ON "inventory_measurements";
+
+--> statement-breakpoint
+
+CREATE TRIGGER "inventory_measurements_rules"
+  BEFORE UPDATE OR DELETE ON "inventory_measurements"
+  FOR EACH ROW
+  EXECUTE FUNCTION "inventory_measurements_rules"();
 
 --> statement-breakpoint
 
@@ -1467,12 +1533,18 @@ CREATE TRIGGER "inventory_formulation_versions_rules"
 
 --> statement-breakpoint
 
+-- A line is in a unit its material can be counted in — a fixed-size unit of the
+-- material's own kind (mass, volume or count) — or a requirement would silently
+-- leave it out. Frozen with its version.
 CREATE OR REPLACE FUNCTION "inventory_formulation_lines_rules"() RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog, public
 AS $$
 DECLARE
   version_status text;
+  material_dimension text;
+  unit_dimension text;
+  unit_size numeric;
 BEGIN
   IF TG_OP IN ('UPDATE', 'DELETE') THEN
     SELECT v.status INTO version_status FROM inventory_formulation_versions v
@@ -1488,6 +1560,15 @@ BEGIN
      WHERE v.organization_id = NEW.organization_id AND v.id = NEW.version_id;
     IF version_status IS NOT NULL AND version_status <> 'draft' THEN
       RAISE EXCEPTION 'The lines of a version are frozen once it leaves draft.' USING ERRCODE = 'check_violation';
+    END IF;
+    SELECT m.dimension INTO material_dimension FROM inventory_materials m
+     WHERE m.organization_id = NEW.organization_id AND m.id = NEW.material_id;
+    SELECT u.dimension, u.to_base INTO unit_dimension, unit_size FROM inventory_units u WHERE u.code = NEW.unit;
+    -- Not found means a reference the foreign keys refuse by name.
+    IF material_dimension IS NOT NULL AND unit_dimension IS NOT NULL
+       AND (unit_size IS NULL OR unit_dimension <> material_dimension) THEN
+      RAISE EXCEPTION '% cannot be counted against this material, which is measured by %.', NEW.unit, material_dimension
+        USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END IF;
@@ -1510,7 +1591,9 @@ CREATE TRIGGER "inventory_formulation_lines_rules"
 
 -- "I need to make a batch of this, at this scale, by this date." Saving a plan
 -- reserves nothing and consumes nothing; it is demand the requirements view
--- counts until a batch is recorded against it.
+-- counts until a batch is recorded against it. Plans on the same date draw on
+-- stock in the order they were made (`created_at` is the moment of the insert,
+-- not of its transaction).
 CREATE TABLE IF NOT EXISTS "inventory_batch_plans" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "organization_id" uuid NOT NULL REFERENCES "organizations"("id"),
@@ -1521,7 +1604,7 @@ CREATE TABLE IF NOT EXISTS "inventory_batch_plans" (
   "include_optional" boolean DEFAULT false NOT NULL,
   "notes" text,
   "created_by" uuid REFERENCES "users"("id"),
-  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "created_at" timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
   CONSTRAINT "inventory_batch_plans_org_id" UNIQUE ("organization_id", "id"),
   CONSTRAINT "inventory_batch_plans_version" FOREIGN KEY ("organization_id", "version_id")
@@ -1534,7 +1617,12 @@ CREATE TABLE IF NOT EXISTS "inventory_batch_plans" (
 
 -- Stock set aside in a particular container for a particular plan. A reserved
 -- amount counts toward that plan's need and is unavailable to every other plan
--- — once, not twice.
+-- — once, not twice — but only for what the container can actually give that
+-- plan on its date. That is checked when the reservation is made
+-- (inventory_reservations_rules) and again every time the requirements are read,
+-- because holds, counts, expiry dates and plan dates all change afterwards. When
+-- reservations on one container add up to more than it holds, the earliest
+-- made is served first.
 CREATE TABLE IF NOT EXISTS "inventory_reservations" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "organization_id" uuid NOT NULL REFERENCES "organizations"("id"),
@@ -1545,7 +1633,7 @@ CREATE TABLE IF NOT EXISTS "inventory_reservations" (
   "unit" text NOT NULL REFERENCES "inventory_units"("code"),
   "released_at" timestamp with time zone,
   "created_by" uuid REFERENCES "users"("id"),
-  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "created_at" timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
   CONSTRAINT "inventory_reservations_org_id" UNIQUE ("organization_id", "id"),
   CONSTRAINT "inventory_reservations_plan" FOREIGN KEY ("organization_id", "plan_id")
     REFERENCES "inventory_batch_plans" ("organization_id", "id") ON DELETE CASCADE,
@@ -1560,6 +1648,142 @@ CREATE TABLE IF NOT EXISTS "inventory_reservations" (
 
 CREATE UNIQUE INDEX IF NOT EXISTS "inventory_reservations_once"
   ON "inventory_reservations" ("organization_id", "plan_id", "container_id", "material_id") WHERE "released_at" IS NULL;
+
+--> statement-breakpoint
+
+CREATE INDEX IF NOT EXISTS "inventory_reservations_container_idx"
+  ON "inventory_reservations" ("organization_id", "container_id", "material_id") WHERE "released_at" IS NULL;
+
+--> statement-breakpoint
+
+-- A reservation is refused unless the container can honour it when it is made:
+-- the plan is open and uses the material; the amount is in a fixed-size unit of
+-- the material's kind; the container's product states how much of the material
+-- it holds; the container is sealed or open, not on hold, of known balance and
+-- not expired by the plan's date (or today, if that is later); and with the
+-- other live reservations on it, no more is set aside than it holds. The
+-- container row is locked first, so two reservations against one container are
+-- decided one after the other.
+CREATE OR REPLACE FUNCTION "inventory_reservations_rules"() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  plan_date date;
+  plan_version uuid;
+  plan_optional boolean;
+  plan_open boolean;
+  material_dimension text;
+  unit_dimension text;
+  unit_size numeric;
+  base_unit text;
+  holds numeric;
+  usable boolean;
+  expires date;
+  found_container boolean;
+  already numeric;
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    IF OLD.released_at IS NOT NULL THEN
+      RAISE EXCEPTION 'A released reservation is history; make a new one.' USING ERRCODE = 'check_violation';
+    END IF;
+    IF NEW.released_at IS NOT NULL THEN
+      IF (NEW.plan_id, NEW.container_id, NEW.material_id, NEW.quantity, NEW.unit)
+         IS DISTINCT FROM (OLD.plan_id, OLD.container_id, OLD.material_id, OLD.quantity, OLD.unit) THEN
+        RAISE EXCEPTION 'Release a reservation as it is.' USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN NEW; -- releasing sets nothing aside
+    END IF;
+  ELSIF NEW.released_at IS NOT NULL THEN
+    RAISE EXCEPTION 'A reservation starts live.' USING ERRCODE = 'check_violation';
+  END IF;
+
+  PERFORM 1 FROM inventory_containers c
+   WHERE c.organization_id = NEW.organization_id AND c.id = NEW.container_id
+     FOR UPDATE;
+  found_container := FOUND;
+
+  SELECT p.planned_for, p.version_id, p.include_optional,
+         p.status IN ('planned', 'committed')
+         AND NOT EXISTS (SELECT 1 FROM inventory_batches b WHERE b.organization_id = p.organization_id AND b.plan_id = p.id)
+    INTO plan_date, plan_version, plan_optional, plan_open
+    FROM inventory_batch_plans p
+   WHERE p.organization_id = NEW.organization_id AND p.id = NEW.plan_id;
+  SELECT m.dimension INTO material_dimension FROM inventory_materials m
+   WHERE m.organization_id = NEW.organization_id AND m.id = NEW.material_id;
+  IF NOT found_container OR plan_date IS NULL OR material_dimension IS NULL THEN
+    -- Not this business's rows: the foreign keys refuse them, by name.
+    RETURN NEW;
+  END IF;
+
+  IF NOT plan_open THEN
+    RAISE EXCEPTION 'Stock is reserved for an open plan, not one that is made or cancelled.' USING ERRCODE = 'check_violation';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM inventory_formulation_lines l
+     WHERE l.organization_id = NEW.organization_id AND l.version_id = plan_version AND l.material_id = NEW.material_id
+       AND (l.role <> 'optional_addition' OR plan_optional)
+  ) THEN
+    RAISE EXCEPTION 'That plan does not use this material.' USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT u.dimension, u.to_base INTO unit_dimension, unit_size FROM inventory_units u WHERE u.code = NEW.unit;
+  IF unit_size IS NULL OR unit_dimension IS DISTINCT FROM material_dimension THEN
+    RAISE EXCEPTION 'This material is counted by %: reserve it in a unit of %.', material_dimension, material_dimension
+      USING ERRCODE = 'check_violation';
+  END IF;
+  base_unit := CASE material_dimension WHEN 'mass' THEN 'g' WHEN 'volume' THEN 'ml' ELSE 'items' END;
+
+  SELECT b.balance * (pc.quantity * cu.to_base) / (pc.per_quantity * pu.to_base),
+         b.status IN ('sealed', 'open') AND b.hold = 'none',
+         b.expiry_date
+    INTO holds, usable, expires
+    FROM inventory_container_balances b
+    JOIN inventory_product_components pc
+      ON pc.organization_id = b.organization_id AND pc.product_id = b.product_id AND pc.material_id = NEW.material_id
+    JOIN inventory_units cu ON cu.code = pc.unit AND cu.dimension = material_dimension
+    JOIN inventory_units pu ON pu.code = pc.per_unit AND pu.dimension = b.dimension
+   WHERE b.organization_id = NEW.organization_id AND b.container_id = NEW.container_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'That container is not recorded as holding a stated amount of this material.' USING ERRCODE = 'check_violation';
+  END IF;
+  IF NOT usable THEN
+    RAISE EXCEPTION 'That container is on hold, empty or disposed: nothing in it can be reserved.' USING ERRCODE = 'check_violation';
+  END IF;
+  IF holds IS NULL THEN
+    RAISE EXCEPTION 'How much that container holds is unknown: count or weigh it before reserving from it.' USING ERRCODE = 'check_violation';
+  END IF;
+  IF expires IS NOT NULL AND expires < greatest(plan_date, current_date) THEN
+    RAISE EXCEPTION 'That container expires before the plan''s date (%).', expires USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT coalesce(sum(r.quantity * u.to_base), 0) INTO already
+    FROM inventory_reservations r
+    JOIN inventory_units u ON u.code = r.unit
+    JOIN inventory_batch_plans p ON p.organization_id = r.organization_id AND p.id = r.plan_id
+   WHERE r.organization_id = NEW.organization_id AND r.container_id = NEW.container_id
+     AND r.material_id = NEW.material_id AND r.released_at IS NULL AND r.id <> NEW.id
+     AND p.status IN ('planned', 'committed')
+     AND NOT EXISTS (SELECT 1 FROM inventory_batches b WHERE b.organization_id = p.organization_id AND b.plan_id = p.id);
+  IF already + NEW.quantity * unit_size > greatest(holds, 0) THEN
+    RAISE EXCEPTION 'That container holds % % of this material and % % is already reserved.',
+      round(greatest(holds, 0), 3), base_unit, round(already, 3), base_unit
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+--> statement-breakpoint
+
+DROP TRIGGER IF EXISTS "inventory_reservations_rules" ON "inventory_reservations";
+
+--> statement-breakpoint
+
+CREATE TRIGGER "inventory_reservations_rules"
+  BEFORE INSERT OR UPDATE ON "inventory_reservations"
+  FOR EACH ROW
+  EXECUTE FUNCTION "inventory_reservations_rules"();
 
 --> statement-breakpoint
 
@@ -1643,8 +1867,12 @@ CREATE TRIGGER "inventory_batches_rules"
 --
 -- `basis` says how an amount is known: from an unopened package's label, from a
 -- weighing (linked), estimated, calculated, or unknown. An opened package's
--- label weight is never an anchor. A counted amount from a weighing must be the
--- weighing's NET, never its gross.
+-- label weight is never an anchor, and a label amount is the package's nominal
+-- contents. 'measured' is earned only by an exact scale weighing of that
+-- container, in a unit of mass, equal to the weighing's NET — never its gross,
+-- never a visual or rough figure, never with a tare that was only estimated, and
+-- never for a container counted in millilitres or items. Everything short of
+-- that is 'estimated'.
 CREATE TABLE IF NOT EXISTS "inventory_movements" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "organization_id" uuid NOT NULL REFERENCES "organizations"("id"),
@@ -1695,7 +1923,9 @@ CREATE TABLE IF NOT EXISTS "inventory_movements" (
   CONSTRAINT "inventory_movements_unknown_only_opening" CHECK ("basis" IS DISTINCT FROM 'unknown' OR "kind" = 'opening'),
   CONSTRAINT "inventory_movements_label_only_new" CHECK ("basis" IS DISTINCT FROM 'labelled_unopened' OR "kind" IN ('opening', 'receipt')),
   CONSTRAINT "inventory_movements_measured" CHECK (
-    "basis" IS DISTINCT FROM 'measured' OR "kind" NOT IN ('opening', 'count') OR "measurement_id" IS NOT NULL
+    "basis" IS DISTINCT FROM 'measured'
+    OR "kind" NOT IN ('opening', 'receipt', 'fill', 'production_output', 'count')
+    OR "measurement_id" IS NOT NULL
   ),
   CONSTRAINT "inventory_movements_sign" CHECK (
     "quantity" IS NULL
@@ -1740,13 +1970,17 @@ DECLARE
   unit_size numeric;
   container_dimension text;
   container_status text;
-  weighed_container uuid;
-  weighed_net numeric;
+  nominal_amount numeric;
+  nominal_size numeric;
+  nominal_dimension text;
+  weighing record;
   capture_container uuid;
   target record;
 BEGIN
-  SELECT c.dimension, c.status INTO container_dimension, container_status
+  SELECT c.dimension, c.status, c.nominal_quantity, nu.to_base, nu.dimension
+    INTO container_dimension, container_status, nominal_amount, nominal_size, nominal_dimension
     FROM inventory_containers c
+    LEFT JOIN inventory_units nu ON nu.code = c.nominal_unit
    WHERE c.organization_id = NEW.organization_id AND c.id = NEW.container_id;
   IF NOT FOUND THEN
     -- Not this business's container. The foreign key refuses it, by name.
@@ -1765,27 +1999,50 @@ BEGIN
     END IF;
   END IF;
 
-  -- An opened package's label says what it held, not what it holds.
-  IF NEW.basis = 'labelled_unopened' AND container_status IS DISTINCT FROM 'sealed' THEN
-    RAISE EXCEPTION 'An opened package is not still its label weight: weigh it, estimate it, or record it as unknown.'
-      USING ERRCODE = 'check_violation';
+  -- An opened package's label says what it held, not what it holds; and what a
+  -- sealed one's label says is its nominal contents, whatever unit it is
+  -- written in.
+  IF NEW.basis = 'labelled_unopened' THEN
+    IF container_status IS DISTINCT FROM 'sealed' THEN
+      RAISE EXCEPTION 'An opened package is not still its label weight: weigh it, estimate it, or record it as unknown.'
+        USING ERRCODE = 'check_violation';
+    END IF;
+    IF nominal_amount IS NULL OR nominal_size IS NULL OR nominal_dimension IS DISTINCT FROM container_dimension
+       OR NEW.quantity * unit_size <> nominal_amount * nominal_size THEN
+      RAISE EXCEPTION 'A label amount is the package''s nominal contents: record them on the container, or weigh or estimate it.'
+        USING ERRCODE = 'check_violation';
+    END IF;
   END IF;
 
-  -- A weighed count is the weighing's net, never its gross.
   IF NEW.measurement_id IS NOT NULL THEN
-    SELECT m.container_id, m.net_g INTO weighed_container, weighed_net
+    SELECT m.container_id, m.net_g, m.tare_g, m.tare_basis, m.method, m.confidence INTO weighing
       FROM inventory_measurements m
      WHERE m.organization_id = NEW.organization_id AND m.id = NEW.measurement_id;
-    IF weighed_container IS DISTINCT FROM NEW.container_id THEN
+    IF weighing.container_id IS DISTINCT FROM NEW.container_id THEN
       RAISE EXCEPTION 'That weighing is of a different container.' USING ERRCODE = 'check_violation';
     END IF;
-    IF NEW.kind IN ('opening', 'count') AND NEW.basis = 'measured' THEN
-      IF weighed_net IS NULL THEN
+  END IF;
+
+  -- 'measured' is earned by an exact scale weighing, in grams. An anchor must
+  -- cite one (the table's CHECK) and equal its net; any other event citing a
+  -- weighing as its measure must cite a real one too.
+  IF NEW.basis = 'measured' AND NEW.measurement_id IS NOT NULL THEN
+    IF container_dimension <> 'mass' THEN
+      RAISE EXCEPTION 'A weighing measures grams; this container is counted by %, so record its amount as estimated.', container_dimension
+        USING ERRCODE = 'check_violation';
+    END IF;
+    IF weighing.method <> 'scale' OR weighing.confidence <> 'exact'
+       OR (weighing.tare_g IS NOT NULL AND weighing.tare_basis IS DISTINCT FROM 'measured') THEN
+      RAISE EXCEPTION 'Only an exact scale weighing, with any tare weighed too, is a measured amount; record this one as estimated.'
+        USING ERRCODE = 'check_violation';
+    END IF;
+    IF NEW.kind IN ('opening', 'receipt', 'fill', 'production_output', 'count') THEN
+      IF weighing.net_g IS NULL THEN
         RAISE EXCEPTION 'That weighing has no net amount (the tare is unknown), so it cannot state what is inside.'
           USING ERRCODE = 'check_violation';
       END IF;
-      IF NEW.quantity * unit_size <> weighed_net THEN
-        RAISE EXCEPTION 'A weighed amount must be the weighing''s net (% g).', weighed_net
+      IF NEW.quantity * unit_size <> weighing.net_g THEN
+        RAISE EXCEPTION 'A weighed amount must be the weighing''s net (% g).', weighing.net_g
           USING ERRCODE = 'check_violation';
       END IF;
     END IF;
@@ -1920,22 +2177,55 @@ CREATE TABLE IF NOT EXISTS "inventory_purchase_intents" (
 
 --> statement-breakpoint
 
--- Approval by a person of this business, transitions in order, and every change
--- of state written to the platform's audit log.
+-- Approval is by the person doing it — the acting user (app.user_id), a person
+-- of this business, never a service account and never in someone else's name —
+-- at the database's time, on the terms as proposed. From approval on, the
+-- commercial terms (offer, packages, total, currency, plan, material, reason,
+-- calculation) and who approved them are frozen: a different purchase is a new
+-- proposal. Transitions go in order, and every change of state, and every
+-- revision of a proposal's terms, is written to the platform's audit log.
 CREATE OR REPLACE FUNCTION "inventory_purchase_intents_rules"() RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog, public
 AS $$
+DECLARE
+  actor uuid := NULLIF(current_setting('app.user_id', true), '')::uuid;
+  terms_changed boolean := false;
+  approving boolean;
 BEGIN
-  IF NEW.approved_by IS NOT NULL
-     AND (TG_OP = 'INSERT' OR NEW.approved_by IS DISTINCT FROM OLD.approved_by) THEN
-    IF NOT EXISTS (
+  IF TG_OP = 'UPDATE' THEN
+    terms_changed := (NEW.organization_id, NEW.offer_id, NEW.packages, NEW.plan_id, NEW.material_id, NEW.reason,
+                      NEW.calculation, NEW.expected_total, NEW.currency, NEW.proposed_by, NEW.idempotency_key, NEW.created_at)
+      IS DISTINCT FROM (OLD.organization_id, OLD.offer_id, OLD.packages, OLD.plan_id, OLD.material_id, OLD.reason,
+                        OLD.calculation, OLD.expected_total, OLD.currency, OLD.proposed_by, OLD.idempotency_key, OLD.created_at);
+    IF OLD.status <> 'proposed' AND terms_changed THEN
+      RAISE EXCEPTION 'A purchase keeps the terms it was approved on. Cancel it and propose again.'
+        USING ERRCODE = 'check_violation';
+    END IF;
+    IF (NEW.approved_by, NEW.approved_at) IS DISTINCT FROM (OLD.approved_by, OLD.approved_at)
+       AND NOT (OLD.status = 'proposed' AND NEW.status = 'approved') THEN
+      RAISE EXCEPTION 'Who approved a purchase, and when, is recorded once, by the approval itself.'
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+
+  approving := NEW.status = 'approved' AND (TG_OP = 'INSERT' OR OLD.status = 'proposed');
+  IF approving THEN
+    IF terms_changed THEN
+      RAISE EXCEPTION 'Approve a purchase on the terms as proposed: revise it first, then approve what is shown.'
+        USING ERRCODE = 'check_violation';
+    END IF;
+    IF actor IS NULL OR NEW.approved_by IS DISTINCT FROM actor OR NOT EXISTS (
       SELECT 1 FROM users u
         JOIN memberships m ON m.user_id = u.id AND m.organization_id = NEW.organization_id
-       WHERE u.id = NEW.approved_by AND NOT u.is_service AND u.deleted_at IS NULL) THEN
-      RAISE EXCEPTION 'A purchase is approved by a person who belongs to this business.'
+       WHERE u.id = actor AND NOT u.is_service AND u.deleted_at IS NULL) THEN
+      RAISE EXCEPTION 'A purchase is approved by the person approving it, who belongs to this business.'
         USING ERRCODE = 'insufficient_privilege';
     END IF;
+    NEW.approved_at := now();
+  ELSIF TG_OP = 'INSERT' AND (NEW.approved_by IS NOT NULL OR NEW.approved_at IS NOT NULL) THEN
+    RAISE EXCEPTION 'Who approved a purchase, and when, is recorded once, by the approval itself.'
+      USING ERRCODE = 'check_violation';
   END IF;
 
   IF TG_OP = 'INSERT' THEN
@@ -1953,14 +2243,18 @@ BEGIN
     END IF;
   END IF;
 
+  IF TG_OP = 'UPDATE' THEN
+    NEW.updated_at := now();
+  END IF;
+
   IF TG_OP = 'INSERT' OR NEW.status IS DISTINCT FROM OLD.status THEN
     INSERT INTO audit_events (organization_id, actor_user_id, action, target)
-    VALUES (
-      NEW.organization_id,
-      coalesce(NULLIF(current_setting('app.user_id', true), '')::uuid, NEW.approved_by, NEW.proposed_by),
-      'inventory.purchase.' || NEW.status,
-      'inventory_purchase_intents:' || NEW.id::text
-    );
+    VALUES (NEW.organization_id, coalesce(actor, NEW.approved_by, NEW.proposed_by),
+            'inventory.purchase.' || NEW.status, 'inventory_purchase_intents:' || NEW.id::text);
+  ELSIF terms_changed THEN
+    INSERT INTO audit_events (organization_id, actor_user_id, action, target)
+    VALUES (NEW.organization_id, coalesce(actor, NEW.proposed_by),
+            'inventory.purchase.revised', 'inventory_purchase_intents:' || NEW.id::text);
   END IF;
   RETURN NEW;
 END
@@ -2136,138 +2430,307 @@ SELECT ol.organization_id,
 
 --> statement-breakpoint
 
--- What each open plan needs of each material by its date, and the shortfall.
+-- What each open plan needs of each material by its date, and what it is short,
+-- worked out the way the stock would actually be used:
 --
---   * Demand: every open plan (planned or committed, with no batch recorded
---     yet), each counted once, including separate additions it requires and,
---     if the plan says so, its optional ones.
---   * A plan's own reservations count toward its need; every reservation is
---     unavailable to the other plans. Once, not twice.
---   * Usable stock: containers that are sealed or open, not on hold, with a
---     KNOWN balance, not expired by the plan's date, of products whose
---     composition states an amount of the material. Containers of unknown
---     balance are reported as `containers_to_verify`, never counted as supply.
---   * Incoming: outstanding order quantities expected ON OR BEFORE the plan's
---     date. A late order, or one with no expected date, does not count.
---   * Plans are taken in date order. `shortfall` is what THIS plan adds to the
---     total missing by its date.
-CREATE OR REPLACE VIEW "inventory_plan_requirements" WITH (security_invoker = true) AS
-WITH open_plans AS (
-  SELECT p.organization_id, p.id, p.version_id, p.planned_for, p.servings, p.include_optional, p.status
-    FROM inventory_batch_plans p
-   WHERE p.status IN ('planned', 'committed')
-     AND NOT EXISTS (
-       SELECT 1 FROM inventory_batches b WHERE b.organization_id = p.organization_id AND b.plan_id = p.id)
-),
-demand AS (
-  SELECT p.organization_id, p.id AS plan_id, p.planned_for, p.status AS plan_status, l.material_id, mat.dimension,
-         sum(p.servings * l.quantity * u.to_base) AS required
-    FROM open_plans p
-    JOIN inventory_formulation_lines l ON l.organization_id = p.organization_id AND l.version_id = p.version_id
-    JOIN inventory_materials mat ON mat.organization_id = l.organization_id AND mat.id = l.material_id
-    JOIN inventory_units u ON u.code = l.unit AND u.dimension = mat.dimension
-   WHERE l.role <> 'optional_addition' OR p.include_optional
-   GROUP BY p.organization_id, p.id, p.planned_for, p.status, l.material_id, mat.dimension
-),
-reserved AS (
-  SELECT r.organization_id, r.plan_id, r.container_id, r.material_id, sum(r.quantity * u.to_base) AS qty
-    FROM inventory_reservations r
-    JOIN inventory_units u ON u.code = r.unit
-    JOIN open_plans p ON p.organization_id = r.organization_id AND p.id = r.plan_id
-   WHERE r.released_at IS NULL
-   GROUP BY r.organization_id, r.plan_id, r.container_id, r.material_id
-),
-held AS (
-  SELECT b.organization_id, b.container_id, pc.material_id, b.expiry_date,
-         b.balance * (pc.quantity * cu.to_base) / (pc.per_quantity * pu.to_base) AS qty
-    FROM inventory_container_balances b
-    JOIN inventory_product_components pc ON pc.organization_id = b.organization_id AND pc.product_id = b.product_id
-    JOIN inventory_materials mat ON mat.organization_id = pc.organization_id AND mat.id = pc.material_id
-    JOIN inventory_units cu ON cu.code = pc.unit AND cu.dimension = mat.dimension
-    JOIN inventory_units pu ON pu.code = pc.per_unit AND pu.dimension = b.dimension
-   WHERE b.status IN ('sealed', 'open') AND b.hold = 'none'
-),
-unreserved AS (
-  SELECT h.organization_id, h.material_id, h.expiry_date,
-         greatest(h.qty - coalesce(sum(r.qty), 0), 0) AS qty
-    FROM held h
-    LEFT JOIN reserved r ON r.organization_id = h.organization_id AND r.container_id = h.container_id AND r.material_id = h.material_id
-   WHERE h.qty IS NOT NULL
-   GROUP BY h.organization_id, h.container_id, h.material_id, h.expiry_date, h.qty
-),
-unknown_containers AS (
-  SELECT organization_id, material_id, count(*) AS n
-    FROM held
-   WHERE qty IS NULL
-   GROUP BY organization_id, material_id
-),
-incoming AS (
-  SELECT ol.organization_id, pc.material_id, o.expected_on,
-         sum(s.packages_outstanding * ol.package_quantity * pku.to_base
-             * (pc.quantity * cu.to_base) / (pc.per_quantity * pu.to_base)) AS qty
-    FROM inventory_order_line_status s
-    JOIN inventory_order_lines ol ON ol.organization_id = s.organization_id AND ol.id = s.order_line_id
-    JOIN inventory_orders o ON o.organization_id = ol.organization_id AND o.id = ol.order_id
-    JOIN inventory_units pku ON pku.code = ol.package_unit
-    JOIN inventory_product_components pc ON pc.organization_id = ol.organization_id AND pc.product_id = ol.product_id
-    JOIN inventory_materials mat ON mat.organization_id = pc.organization_id AND mat.id = pc.material_id
-    JOIN inventory_units cu ON cu.code = pc.unit AND cu.dimension = mat.dimension
-    JOIN inventory_units pu ON pu.code = pc.per_unit AND pu.dimension = pku.dimension
-   WHERE o.status IN ('placed', 'partially_received')
-     AND o.expected_on IS NOT NULL
-     AND s.packages_outstanding > 0
-   GROUP BY ol.organization_id, pc.material_id, o.expected_on
-),
-needs AS (
-  SELECT d.*,
-         coalesce(rp.qty, 0) AS reserved_for_plan,
-         greatest(d.required - coalesce(rp.qty, 0), 0) AS net_required
-    FROM demand d
-    LEFT JOIN (
-      SELECT organization_id, plan_id, material_id, sum(qty) AS qty FROM reserved GROUP BY 1, 2, 3
-    ) rp ON rp.organization_id = d.organization_id AND rp.plan_id = d.plan_id AND rp.material_id = d.material_id
-),
-ordered AS (
-  SELECT n.*,
-         sum(n.net_required) OVER (
-           PARTITION BY n.organization_id, n.material_id
-           ORDER BY n.planned_for, n.plan_id
-           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative
-    FROM needs n
-),
-supplied AS (
-  SELECT o.*,
-         coalesce(st.qty, 0) AS usable_stock,
-         coalesce(inc.qty, 0) AS arriving_in_time
-    FROM ordered o
-    LEFT JOIN LATERAL (
-      SELECT sum(u.qty) AS qty FROM unreserved u
-       WHERE u.organization_id = o.organization_id AND u.material_id = o.material_id
-         AND (u.expiry_date IS NULL OR u.expiry_date >= o.planned_for)
-    ) st ON true
-    LEFT JOIN LATERAL (
-      SELECT sum(i.qty) AS qty FROM incoming i
-       WHERE i.organization_id = o.organization_id AND i.material_id = o.material_id
-         AND i.expected_on <= o.planned_for
-    ) inc ON true
+--   1. Demand. Every open plan (planned or committed, with no batch recorded
+--      yet), each counted once, with the additions it requires and, if it says
+--      so, its optional ones. A line whose unit cannot be counted against its
+--      material (no fixed size, or another kind) makes the plan's requirement
+--      for that material unknown — NULL, and so is its shortfall — never
+--      silently smaller.
+--   2. Supply. On the shelf: containers that are sealed or open, not on hold,
+--      of KNOWN balance, of a product whose composition states an amount of
+--      the material; each usable up to its expiry date. Containers of unknown
+--      balance are `containers_to_verify`, never supply. On order: outstanding
+--      quantities of placed orders, usable from their expected date. An order
+--      with no expected date is not counted.
+--   3. Reservations first, earliest made first. A reservation counts only for
+--      what its container can still give that plan on the plan's date: the
+--      container must still be supply for the material (as above), not expire
+--      before the date, and not be already given to an earlier reservation; and
+--      the amount must be in a fixed-size unit of the material's kind. What it
+--      cannot be given is `reserved_unbacked`, and `reservations_to_review`
+--      counts the reservations concerned. This is decided at every read, so a
+--      hold, a count, an expiry or a new plan date takes effect at once.
+--   4. Then each plan, in date order (and in the order plans were made, on the
+--      same date), takes what it still needs from what is left and usable on
+--      its date: the earliest-expiring first, stock on the shelf before
+--      deliveries. Stock that expires between two plans goes to the earlier
+--      one rather than being counted against the later; a delivery counts only
+--      for plans on or after its expected date.
+--
+-- A plan's date here is its planned date, or today for a plan already overdue.
+-- `usable_stock` and `arriving_in_time` are context: what is usable on that
+-- date and not reserved, and what is due by then, before any plan takes from
+-- them. `allocated_from_stock` and `allocated_from_incoming` are what this plan
+-- takes. `needed_first_by_earlier_plans` is what earlier plans still need after
+-- their reservations.
+--
+-- One known simplification: a product holding several materials supplies each
+-- of them in full, independently.
+CREATE OR REPLACE FUNCTION "inventory_plan_requirements_rows"()
+RETURNS TABLE (
+  "organization_id" uuid,
+  "plan_id" uuid,
+  "planned_for" date,
+  "plan_status" text,
+  "material_id" uuid,
+  "dimension" text,
+  "required" numeric,
+  "reserved_for_plan" numeric,
+  "reserved_valid" numeric,
+  "reserved_unbacked" numeric,
+  "reservations_to_review" integer,
+  "usable_stock" numeric,
+  "arriving_in_time" numeric,
+  "allocated_from_stock" numeric,
+  "allocated_from_incoming" numeric,
+  "needed_first_by_earlier_plans" numeric,
+  "shortfall" numeric,
+  "containers_to_verify" integer
 )
-SELECT s.organization_id,
-       s.plan_id,
-       s.planned_for,
-       s.plan_status,
-       s.material_id,
-       s.dimension,
-       CASE s.dimension WHEN 'mass' THEN 'g' WHEN 'volume' THEN 'ml' ELSE 'count' END AS base_unit,
-       s.required::numeric(18, 4) AS required,
-       s.reserved_for_plan::numeric(18, 4) AS reserved_for_plan,
-       s.usable_stock::numeric(18, 4) AS usable_stock,
-       s.arriving_in_time::numeric(18, 4) AS arriving_in_time,
-       (s.cumulative - s.net_required)::numeric(18, 4) AS needed_first_by_earlier_plans,
-       (greatest(0, s.cumulative - s.usable_stock - s.arriving_in_time)
-        - greatest(0, s.cumulative - s.net_required - s.usable_stock - s.arriving_in_time))::numeric(18, 4) AS shortfall,
-       coalesce(uc.n, 0) AS containers_to_verify
-  FROM supplied s
-  LEFT JOIN unknown_containers uc ON uc.organization_id = s.organization_id AND uc.material_id = s.material_id;
+LANGUAGE plpgsql
+STABLE
+SET search_path = pg_catalog, public
+AS $$
+#variable_conflict use_column
+DECLARE
+  grp record;
+  res record;
+  -- the plans of one (business, material), in the order they draw on stock
+  p_id uuid[];
+  p_date date[];
+  p_status text[];
+  p_required numeric[];
+  p_due date[];
+  p_reserved numeric[];
+  p_valid numeric[];
+  p_review integer[];
+  -- its supply, in the order it is used: earliest expiry first, shelf before deliveries
+  s_container uuid[];
+  s_incoming boolean[];
+  s_from date[];
+  s_expiry date[];
+  s_left numeric[];
+  s_free numeric[];
+  unknown_n integer;
+  np integer;
+  ns integer;
+  k integer;
+  i integer;
+  idx integer;
+  need numeric;
+  take numeric;
+  earlier numeric;
+  from_stock numeric;
+  from_incoming numeric;
+  usable numeric;
+  arriving numeric;
+BEGIN
+  FOR grp IN
+    SELECT DISTINCT pl.organization_id AS org, fl.material_id AS mat, mt.dimension AS dim
+      FROM inventory_batch_plans pl
+      JOIN inventory_formulation_lines fl ON fl.organization_id = pl.organization_id AND fl.version_id = pl.version_id
+      JOIN inventory_materials mt ON mt.organization_id = fl.organization_id AND mt.id = fl.material_id
+     WHERE pl.status IN ('planned', 'committed')
+       AND NOT EXISTS (SELECT 1 FROM inventory_batches b WHERE b.organization_id = pl.organization_id AND b.plan_id = pl.id)
+       AND (fl.role <> 'optional_addition' OR pl.include_optional)
+  LOOP
+    -- 1. Demand, plan by plan.
+    SELECT array_agg(d.id ORDER BY d.planned_for, d.created_at, d.id),
+           array_agg(d.planned_for ORDER BY d.planned_for, d.created_at, d.id),
+           array_agg(d.status ORDER BY d.planned_for, d.created_at, d.id),
+           array_agg(d.required ORDER BY d.planned_for, d.created_at, d.id)
+      INTO p_id, p_date, p_status, p_required
+      FROM (
+        SELECT pl.id, pl.planned_for, pl.created_at, pl.status,
+               CASE WHEN bool_and(u.to_base IS NOT NULL AND u.dimension = grp.dim)
+                    THEN sum(pl.servings * fl.quantity * u.to_base) END AS required
+          FROM inventory_batch_plans pl
+          JOIN inventory_formulation_lines fl ON fl.organization_id = pl.organization_id AND fl.version_id = pl.version_id
+          JOIN inventory_units u ON u.code = fl.unit
+         WHERE pl.organization_id = grp.org AND fl.material_id = grp.mat
+           AND pl.status IN ('planned', 'committed')
+           AND NOT EXISTS (SELECT 1 FROM inventory_batches b WHERE b.organization_id = pl.organization_id AND b.plan_id = pl.id)
+           AND (fl.role <> 'optional_addition' OR pl.include_optional)
+         GROUP BY pl.id, pl.planned_for, pl.created_at, pl.status
+      ) d;
+    np := coalesce(array_length(p_id, 1), 0);
+    CONTINUE WHEN np = 0;
+    p_due := ARRAY(SELECT greatest(x, current_date) FROM unnest(p_date) WITH ORDINALITY AS t(x, n) ORDER BY n);
+    p_reserved := array_fill(0::numeric, ARRAY[np]);
+    p_valid := array_fill(0::numeric, ARRAY[np]);
+    p_review := array_fill(0, ARRAY[np]);
+
+    -- 2. Supply.
+    SELECT array_agg(y.container_id ORDER BY y.expiry NULLS LAST, y.incoming, y.since NULLS LAST, y.made, y.ref),
+           array_agg(y.incoming ORDER BY y.expiry NULLS LAST, y.incoming, y.since NULLS LAST, y.made, y.ref),
+           array_agg(y.available_from ORDER BY y.expiry NULLS LAST, y.incoming, y.since NULLS LAST, y.made, y.ref),
+           array_agg(y.expiry ORDER BY y.expiry NULLS LAST, y.incoming, y.since NULLS LAST, y.made, y.ref),
+           array_agg(y.qty ORDER BY y.expiry NULLS LAST, y.incoming, y.since NULLS LAST, y.made, y.ref)
+      INTO s_container, s_incoming, s_from, s_expiry, s_left
+      FROM (
+        SELECT b.container_id, false AS incoming, NULL::date AS available_from, b.expiry_date AS expiry,
+               b.acquired_on AS since, c.created_at AS made, b.container_id::text AS ref,
+               b.balance * (pc.quantity * cu.to_base) / (pc.per_quantity * pu.to_base) AS qty
+          FROM inventory_container_balances b
+          JOIN inventory_containers c ON c.organization_id = b.organization_id AND c.id = b.container_id
+          JOIN inventory_product_components pc
+            ON pc.organization_id = b.organization_id AND pc.product_id = b.product_id AND pc.material_id = grp.mat
+          JOIN inventory_units cu ON cu.code = pc.unit AND cu.dimension = grp.dim
+          JOIN inventory_units pu ON pu.code = pc.per_unit AND pu.dimension = b.dimension
+         WHERE b.organization_id = grp.org AND b.status IN ('sealed', 'open') AND b.hold = 'none'
+           AND b.balance IS NOT NULL
+        UNION ALL
+        SELECT NULL::uuid, true, o.expected_on, NULL::date, o.expected_on, ol.created_at, ol.id::text,
+               s.packages_outstanding * ol.package_quantity * pku.to_base
+               * (pc.quantity * cu.to_base) / (pc.per_quantity * pu.to_base)
+          FROM inventory_order_line_status s
+          JOIN inventory_order_lines ol ON ol.organization_id = s.organization_id AND ol.id = s.order_line_id
+          JOIN inventory_orders o ON o.organization_id = ol.organization_id AND o.id = ol.order_id
+          JOIN inventory_units pku ON pku.code = ol.package_unit
+          JOIN inventory_product_components pc
+            ON pc.organization_id = ol.organization_id AND pc.product_id = ol.product_id AND pc.material_id = grp.mat
+          JOIN inventory_units cu ON cu.code = pc.unit AND cu.dimension = grp.dim
+          JOIN inventory_units pu ON pu.code = pc.per_unit AND pu.dimension = pku.dimension
+         WHERE ol.organization_id = grp.org
+           AND o.status IN ('placed', 'partially_received')
+           AND o.expected_on IS NOT NULL
+           AND s.packages_outstanding > 0
+      ) y
+     WHERE y.qty > 0;
+    ns := coalesce(array_length(s_left, 1), 0);
+
+    SELECT count(*) INTO unknown_n
+      FROM inventory_container_balances b
+      JOIN inventory_product_components pc
+        ON pc.organization_id = b.organization_id AND pc.product_id = b.product_id AND pc.material_id = grp.mat
+      JOIN inventory_units cu ON cu.code = pc.unit AND cu.dimension = grp.dim
+      JOIN inventory_units pu ON pu.code = pc.per_unit AND pu.dimension = b.dimension
+     WHERE b.organization_id = grp.org AND b.status IN ('sealed', 'open') AND b.hold = 'none'
+       AND b.balance IS NULL;
+
+    -- 3. Reservations, earliest made first.
+    FOR res IN
+      SELECT r.plan_id, r.container_id, r.quantity * u.to_base AS qty,
+             (u.to_base IS NOT NULL AND u.dimension = grp.dim) AS unit_ok
+        FROM inventory_reservations r
+        JOIN inventory_units u ON u.code = r.unit
+       WHERE r.organization_id = grp.org AND r.material_id = grp.mat AND r.released_at IS NULL
+         AND r.plan_id = ANY (p_id)
+       ORDER BY r.created_at, r.id
+    LOOP
+      k := array_position(p_id, res.plan_id);
+      take := 0;
+      IF res.unit_ok THEN
+        p_reserved[k] := p_reserved[k] + res.qty;
+        idx := array_position(s_container, res.container_id);
+        IF idx IS NOT NULL AND (s_expiry[idx] IS NULL OR s_expiry[idx] >= p_due[k]) THEN
+          take := least(res.qty, greatest(s_left[idx], 0));
+          s_left[idx] := s_left[idx] - take;
+        END IF;
+        p_valid[k] := p_valid[k] + take;
+      END IF;
+      IF NOT res.unit_ok OR take < res.qty THEN
+        p_review[k] := p_review[k] + 1;
+      END IF;
+    END LOOP;
+    s_free := s_left;
+
+    -- 4. Each plan in turn takes what it still needs.
+    earlier := 0;
+    FOR k IN 1 .. np LOOP
+      usable := 0;
+      arriving := 0;
+      FOR i IN 1 .. ns LOOP
+        IF s_expiry[i] IS NULL OR s_expiry[i] >= p_due[k] THEN
+          IF NOT s_incoming[i] THEN
+            usable := usable + s_free[i];
+          ELSIF s_from[i] <= p_due[k] THEN
+            arriving := arriving + s_free[i];
+          END IF;
+        END IF;
+      END LOOP;
+
+      -- GREATEST ignores NULLs, so an unknown requirement is kept unknown explicitly.
+      need := CASE WHEN p_required[k] IS NULL THEN NULL ELSE greatest(p_required[k] - p_valid[k], 0) END;
+      from_stock := 0;
+      from_incoming := 0;
+      IF need > 0 THEN
+        FOR i IN 1 .. ns LOOP
+          EXIT WHEN need = 0;
+          CONTINUE WHEN s_left[i] <= 0;
+          CONTINUE WHEN s_expiry[i] IS NOT NULL AND s_expiry[i] < p_due[k];
+          CONTINUE WHEN s_incoming[i] AND s_from[i] > p_due[k];
+          take := least(need, s_left[i]);
+          s_left[i] := s_left[i] - take;
+          need := need - take;
+          IF s_incoming[i] THEN
+            from_incoming := from_incoming + take;
+          ELSE
+            from_stock := from_stock + take;
+          END IF;
+        END LOOP;
+      END IF;
+
+      organization_id := grp.org;
+      plan_id := p_id[k];
+      planned_for := p_date[k];
+      plan_status := p_status[k];
+      material_id := grp.mat;
+      dimension := grp.dim;
+      required := p_required[k];
+      reserved_for_plan := p_reserved[k];
+      reserved_valid := p_valid[k];
+      reserved_unbacked := p_reserved[k] - p_valid[k];
+      reservations_to_review := p_review[k];
+      usable_stock := usable;
+      arriving_in_time := arriving;
+      allocated_from_stock := CASE WHEN p_required[k] IS NULL THEN NULL ELSE from_stock END;
+      allocated_from_incoming := CASE WHEN p_required[k] IS NULL THEN NULL ELSE from_incoming END;
+      needed_first_by_earlier_plans := earlier;
+      shortfall := need;
+      containers_to_verify := unknown_n;
+      RETURN NEXT;
+
+      IF p_required[k] IS NOT NULL THEN
+        earlier := earlier + greatest(p_required[k] - p_valid[k], 0);
+      END IF;
+    END LOOP;
+  END LOOP;
+END
+$$;
+
+--> statement-breakpoint
+
+REVOKE ALL ON FUNCTION "inventory_plan_requirements_rows"() FROM PUBLIC;
+
+--> statement-breakpoint
+
+-- The rows above, in base units (g, ml or items). The view and the function both
+-- run with the caller's rights, so the tenant policies apply underneath.
+CREATE OR REPLACE VIEW "inventory_plan_requirements" WITH (security_invoker = true) AS
+SELECT r.organization_id,
+       r.plan_id,
+       r.planned_for,
+       r.plan_status,
+       r.material_id,
+       r.dimension,
+       CASE r.dimension WHEN 'mass' THEN 'g' WHEN 'volume' THEN 'ml' ELSE 'count' END AS base_unit,
+       r.required::numeric(18, 4) AS required,
+       r.reserved_for_plan::numeric(18, 4) AS reserved_for_plan,
+       r.usable_stock::numeric(18, 4) AS usable_stock,
+       r.arriving_in_time::numeric(18, 4) AS arriving_in_time,
+       r.needed_first_by_earlier_plans::numeric(18, 4) AS needed_first_by_earlier_plans,
+       r.shortfall::numeric(18, 4) AS shortfall,
+       r.containers_to_verify,
+       r.reserved_valid::numeric(18, 4) AS reserved_valid,
+       r.reserved_unbacked::numeric(18, 4) AS reserved_unbacked,
+       r.reservations_to_review,
+       r.allocated_from_stock::numeric(18, 4) AS allocated_from_stock,
+       r.allocated_from_incoming::numeric(18, 4) AS allocated_from_incoming
+  FROM inventory_plan_requirements_rows() r;
 
 --> statement-breakpoint
 
@@ -2351,7 +2814,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
   "inventory_offers", "inventory_sourcing_preferences", "inventory_orders", "inventory_order_lines",
   "inventory_receipts", "inventory_receipt_lines", "inventory_locations", "inventory_lots",
   "inventory_containers", "inventory_captures", "inventory_documents", "inventory_document_links",
-  "inventory_extractions", "inventory_extracted_fields", "inventory_match_candidates", "inventory_measurements",
+  "inventory_extractions", "inventory_extracted_fields", "inventory_match_candidates",
   "inventory_product_nutrients", "inventory_product_claims", "inventory_offer_prices",
   "inventory_formulation_versions", "inventory_formulation_lines", "inventory_batch_plans",
   "inventory_reservations", "inventory_batches", "inventory_notes", "inventory_purchase_intents"
@@ -2359,10 +2822,15 @@ TO portal_app;
 
 --> statement-breakpoint
 
--- The ledger is append-only for the application: no UPDATE, no DELETE. A
--- mistake is voided by a reversal, so the history of what was believed and
--- when is never lost.
-GRANT SELECT, INSERT ON "inventory_movements" TO portal_app;
+-- The ledger and the weighings it rests on are append-only for the application:
+-- no UPDATE, no DELETE. A mistake is voided by a reversal, and a weighing is
+-- corrected by weighing again, so the history of what was believed and why is
+-- never lost.
+GRANT SELECT, INSERT ON "inventory_movements", "inventory_measurements" TO portal_app;
+
+--> statement-breakpoint
+
+GRANT EXECUTE ON FUNCTION "inventory_plan_requirements_rows"() TO portal_app;
 
 --> statement-breakpoint
 

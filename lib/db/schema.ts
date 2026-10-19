@@ -2609,6 +2609,7 @@ export const inventoryDocuments = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    /** The capture this file was first uploaded in. Which captures use it: inventory_document_links. */
     captureId: uuid("capture_id"),
     kind: text("kind").$type<"photo" | "invoice" | "receipt" | "packing_slip" | "certificate" | "other">().notNull(),
     contentType: text("content_type").notNull(),
@@ -2635,12 +2636,18 @@ export const inventoryDocuments = pgTable(
   ],
 );
 
+/**
+ * What a document is evidence of — exactly one record per link, each link once.
+ * A capture's photos are the documents linked to it: one file (one sha256) can
+ * serve several captures and several containers.
+ */
 export const inventoryDocumentLinks = pgTable(
   "inventory_document_links",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
     documentId: uuid("document_id").notNull(),
+    captureId: uuid("capture_id"),
     productId: uuid("product_id"),
     lotId: uuid("lot_id"),
     containerId: uuid("container_id"),
@@ -2651,10 +2658,18 @@ export const inventoryDocumentLinks = pgTable(
     createdAt,
   },
   (t) => [
+    unique("inventory_document_links_once")
+      .on(t.organizationId, t.documentId, t.captureId, t.productId, t.lotId, t.containerId, t.orderId, t.businessId, t.offerId)
+      .nullsNotDistinct(),
     foreignKey({
       name: "inventory_document_links_document",
       columns: [t.organizationId, t.documentId],
       foreignColumns: [inventoryDocuments.organizationId, inventoryDocuments.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_document_links_capture",
+      columns: [t.organizationId, t.captureId],
+      foreignColumns: [inventoryCaptures.organizationId, inventoryCaptures.id],
     }).onDelete("cascade"),
     foreignKey({
       name: "inventory_document_links_product",
@@ -3028,7 +3043,8 @@ export const inventoryBatchPlans = pgTable(
     includeOptional: boolean("include_optional").notNull().default(false),
     notes: text("notes"),
     createdBy: uuid("created_by").references(() => users.id),
-    createdAt,
+    /** The moment of the insert: plans on one date draw on stock in this order. */
+    createdAt: stamp("created_at").notNull().default(sql`clock_timestamp()`),
     updatedAt,
   },
   (t) => [
@@ -3053,7 +3069,8 @@ export const inventoryReservations = pgTable(
     unit: text("unit").notNull().references(() => inventoryUnits.code),
     releasedAt: stamp("released_at"),
     createdBy: uuid("created_by").references(() => users.id),
-    createdAt,
+    /** The moment of the insert: on an over-reserved container, earliest is served first. */
+    createdAt: stamp("created_at").notNull().default(sql`clock_timestamp()`),
   },
   (t) => [
     unique("inventory_reservations_org_id").on(t.organizationId, t.id),
@@ -3355,6 +3372,12 @@ export const inventoryOrderLineStatus = pgView("inventory_order_line_status", {
   quantityOutstanding: numeric("quantity_outstanding", { precision: 18, scale: 4 }),
 }).existing();
 
+/**
+ * Per open plan and material: earliest-expiring stock first, reservations
+ * re-checked at every read (inventory_plan_requirements_rows() in 0048).
+ * `required`, `shortfall` and the allocations are NULL when a recipe line
+ * cannot be counted against its material — unknown, never smaller.
+ */
 export const inventoryPlanRequirements = pgView("inventory_plan_requirements", {
   organizationId: uuid("organization_id").notNull(),
   planId: uuid("plan_id").notNull(),
@@ -3363,13 +3386,18 @@ export const inventoryPlanRequirements = pgView("inventory_plan_requirements", {
   materialId: uuid("material_id").notNull(),
   dimension: text("dimension").notNull(),
   baseUnit: text("base_unit").notNull(),
-  required: numeric("required", { precision: 18, scale: 4 }).notNull(),
+  required: numeric("required", { precision: 18, scale: 4 }),
   reservedForPlan: numeric("reserved_for_plan", { precision: 18, scale: 4 }).notNull(),
   usableStock: numeric("usable_stock", { precision: 18, scale: 4 }).notNull(),
   arrivingInTime: numeric("arriving_in_time", { precision: 18, scale: 4 }).notNull(),
   neededFirstByEarlierPlans: numeric("needed_first_by_earlier_plans", { precision: 18, scale: 4 }).notNull(),
-  shortfall: numeric("shortfall", { precision: 18, scale: 4 }).notNull(),
-  containersToVerify: bigint("containers_to_verify", { mode: "number" }).notNull(),
+  shortfall: numeric("shortfall", { precision: 18, scale: 4 }),
+  containersToVerify: integer("containers_to_verify").notNull(),
+  reservedValid: numeric("reserved_valid", { precision: 18, scale: 4 }).notNull(),
+  reservedUnbacked: numeric("reserved_unbacked", { precision: 18, scale: 4 }).notNull(),
+  reservationsToReview: integer("reservations_to_review").notNull(),
+  allocatedFromStock: numeric("allocated_from_stock", { precision: 18, scale: 4 }),
+  allocatedFromIncoming: numeric("allocated_from_incoming", { precision: 18, scale: 4 }),
 }).existing();
 
 export const inventoryPurchaseOptions = pgView("inventory_purchase_options", {
