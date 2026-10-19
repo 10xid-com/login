@@ -53,6 +53,44 @@ const MUST_BE_PROTECTED = [
   "social_media_uploads",
   // Grant decisions and what agency people do: one business's record.
   "audit_events",
+  // Inventory (0048). A business's stock, purchases, photos, extraction
+  // results, preferences and notes are its own, with no staff read policy:
+  // naming a vendor shows that vendor nothing.
+  "inventory_nutrients",
+  "inventory_materials",
+  "inventory_material_aliases",
+  "inventory_businesses",
+  "inventory_brands",
+  "inventory_formulations",
+  "inventory_products",
+  "inventory_product_components",
+  "inventory_offers",
+  "inventory_sourcing_preferences",
+  "inventory_orders",
+  "inventory_order_lines",
+  "inventory_receipts",
+  "inventory_receipt_lines",
+  "inventory_locations",
+  "inventory_lots",
+  "inventory_containers",
+  "inventory_captures",
+  "inventory_documents",
+  "inventory_document_links",
+  "inventory_extractions",
+  "inventory_extracted_fields",
+  "inventory_match_candidates",
+  "inventory_measurements",
+  "inventory_product_nutrients",
+  "inventory_product_claims",
+  "inventory_offer_prices",
+  "inventory_formulation_versions",
+  "inventory_formulation_lines",
+  "inventory_batch_plans",
+  "inventory_reservations",
+  "inventory_batches",
+  "inventory_movements",
+  "inventory_notes",
+  "inventory_purchase_intents",
 ];
 
 /** Read before a scope exists. Each entry needs a reason that survives review. */
@@ -80,6 +118,17 @@ const EXEMPT: Record<string, string> = {
     "scheduled reminder run, which works across every business by design; " +
     "it holds ids and a delivery error, no business content. Its rules " +
     "(claimed once, sent is final, only failures retried) are 0026's trigger.",
+  identities:
+    "The iD register (0009, extended by 0048). A row is held by a person " +
+    "(user_id) or by a company (organization_id) — the company the iD NAMES, " +
+    "not a business whose private data it is. An iD is a public handle: it is " +
+    "looked up by its code before any scope exists, when somebody scans or " +
+    "types it, and a company's iD is shared by every business that buys from " +
+    "that company. A tenant policy here would hide a vendor's iD from all its " +
+    "customers but one. Holding an iD grants nothing: no membership, no " +
+    "sign-in, and no row of any business's inventory, whose tables are all " +
+    "protected above. Who may issue, revoke or change a company's iD is " +
+    "0048's trigger (identities_company_rules).",
   connections:
     "Holds rows with a NULL organization_id — two people who scanned each " +
     "other's iD know each other personally, and that belongs to no company. " +

@@ -184,7 +184,13 @@ export const API_KEY_RATE = {
  * who is who — and never by being added to a company.
  */
 export type RoleDerivationMembership = {
-  organizationType: "client" | "internal";
+  /**
+   * `listed` (0048) is a company somebody buys from that has not claimed an
+   * account. The database refuses it members and invitations, so it never
+   * reaches here in practice — and if it did, it is not the house, so it would
+   * confer nothing.
+   */
+  organizationType: "client" | "internal" | "listed";
   role: MembershipRole;
 };
 

@@ -5,13 +5,19 @@ import {
   boolean,
   char,
   customType,
+  date,
+  foreignKey,
   index,
   integer,
   jsonb,
+  numeric,
   pgEnum,
   pgTable,
+  pgView,
+  smallint,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -33,9 +39,16 @@ const updatedAt = timestamp("updated_at", { withTimezone: true })
   .notNull()
   .defaultNow();
 
+/**
+ * `listed` (0048): a company 10XiD knows about but that has not claimed an
+ * account — a vendor, supplier or manufacturer some business buys from. It has
+ * no members, no domains and no sign-in; it exists to be named, and to hold its
+ * own iD.
+ */
 export const organizationType = pgEnum("organization_type", [
   "client",
   "internal",
+  "listed",
 ]);
 /**
  * A direct member's role in one business.
@@ -316,12 +329,21 @@ export const identities = pgTable(
   "identities",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id),
+    /**
+     * The person who holds this iD — or null when a company holds it (0048).
+     * Exactly one of user_id and organization_id is set, enforced by the
+     * identities_exactly_one_holder check.
+     */
+    userId: uuid("user_id").references(() => users.id),
+    /**
+     * The company that holds this iD (0048): a vendor, supplier or
+     * manufacturer, usually of type `listed`. Holding an iD names a company;
+     * it grants it no membership, no sign-in and no access to anything.
+     */
+    organizationId: uuid("organization_id").references(() => organizations.id),
     /**
      * The public identifier. Unique across every row this table has ever held,
-     * including revoked ones — see above.
+     * including revoked ones, and across people AND companies — see above.
      *
      * Deliberately NOT a foreign key target anywhere in this schema.
      */
@@ -2013,3 +2035,1396 @@ export const auditEvents = pgTable("audit_events", {
   target: text("target"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/* ------------------------------------------------------------------ */
+/* Inventory (0048)                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What a business owns, what each thing is, where it came from, what is left
+ * of it, and what to order before a dated batch. docs/inventory.md is the why;
+ * drizzle/0048_inventory.sql is the authority, including every CHECK, partial
+ * index, trigger and view that is not repeated here.
+ *
+ * Every table but inventory_units carries organization_id and is isolated by
+ * row-level security with no staff policy. Every reference between inventory
+ * rows is a composite foreign key on (organization_id, id), so a row cannot
+ * name another business's row even by uuid. Vendors, suppliers and
+ * manufacturers are `organizations` rows (type `listed` when unclaimed), each
+ * able to hold its own iD; inventory_businesses is this business's private
+ * relationship with one of them.
+ */
+
+const quantity = (name: string) => numeric(name, { precision: 14, scale: 4 });
+const money = (name: string) => numeric(name, { precision: 12, scale: 2 });
+const stamp = (name: string) => timestamp(name, { withTimezone: true });
+
+export const inventoryUnits = pgTable("inventory_units", {
+  code: text("code").primaryKey(),
+  name: text("name").notNull(),
+  dimension: text("dimension").$type<"mass" | "volume" | "count" | "energy" | "other">().notNull(),
+  /** Size of one unit in its dimension's base (g, ml, item, kcal); null for `other`. */
+  toBase: numeric("to_base", { precision: 24, scale: 12 }),
+});
+
+export const inventoryNutrients = pgTable(
+  "inventory_nutrients",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    name: text("name").notNull(),
+    kind: text("kind").notNull().default("compound"),
+    defaultUnit: text("default_unit").references(() => inventoryUnits.code),
+    notes: text("notes"),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [unique("inventory_nutrients_org_id").on(t.organizationId, t.id)],
+);
+
+export const inventoryMaterials = pgTable(
+  "inventory_materials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    name: text("name").notNull(),
+    /** What distinguishes it from a similar material: "whole powder", "extract, low oxalate". */
+    specification: text("specification"),
+    category: text("category"),
+    dimension: text("dimension").$type<"mass" | "volume" | "count">().notNull().default("mass"),
+    description: text("description"),
+    archivedAt: stamp("archived_at"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [unique("inventory_materials_org_id").on(t.organizationId, t.id)],
+);
+
+export const inventoryMaterialAliases = pgTable(
+  "inventory_material_aliases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    materialId: uuid("material_id").notNull(),
+    alias: text("alias").notNull(),
+    createdAt,
+  },
+  (t) => [
+    foreignKey({
+      name: "inventory_material_aliases_material",
+      columns: [t.organizationId, t.materialId],
+      foreignColumns: [inventoryMaterials.organizationId, inventoryMaterials.id],
+    }).onDelete("cascade"),
+  ],
+);
+
+/** This business's relationship with one company, whatever roles it plays. */
+export const inventoryBusinesses = pgTable(
+  "inventory_businesses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    /** The company itself — shared, and the holder of its iD. */
+    companyId: uuid("company_id").notNull().references(() => organizations.id),
+    isVendor: boolean("is_vendor").notNull().default(false),
+    isSupplier: boolean("is_supplier").notNull().default(false),
+    isManufacturer: boolean("is_manufacturer").notNull().default(false),
+    isBrandOwner: boolean("is_brand_owner").notNull().default(false),
+    status: text("status").$type<"active" | "avoid" | "inactive">().notNull().default("active"),
+    customerNumber: text("customer_number"),
+    website: text("website"),
+    orderingUrl: text("ordering_url"),
+    phone: text("phone"),
+    email: text("email"),
+    address: text("address"),
+    notes: text("notes"),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_businesses_org_id").on(t.organizationId, t.id),
+    unique("inventory_businesses_once").on(t.organizationId, t.companyId),
+  ],
+);
+
+export const inventoryBrands = pgTable(
+  "inventory_brands",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    name: text("name").notNull(),
+    ownerId: uuid("owner_id"),
+    website: text("website"),
+    notes: text("notes"),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_brands_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_brands_owner",
+      columns: [t.organizationId, t.ownerId],
+      foreignColumns: [inventoryBusinesses.organizationId, inventoryBusinesses.id],
+    }),
+  ],
+);
+
+export const inventoryFormulations = pgTable(
+  "inventory_formulations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    name: text("name").notNull(),
+    notes: text("notes"),
+    archivedAt: stamp("archived_at"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [unique("inventory_formulations_org_id").on(t.organizationId, t.id)],
+);
+
+export const inventoryProducts = pgTable(
+  "inventory_products",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    name: text("name").notNull(),
+    variant: text("variant"),
+    brandId: uuid("brand_id"),
+    manufacturerId: uuid("manufacturer_id"),
+    distributorId: uuid("distributor_id"),
+    form: text("form").notNull().default("unknown"),
+    composition: text("composition").$type<"single" | "complete" | "partial" | "unknown">().notNull().default("unknown"),
+    packageQuantity: quantity("package_quantity"),
+    packageUnit: text("package_unit").references(() => inventoryUnits.code),
+    gtin: text("gtin"),
+    servingQuantity: quantity("serving_quantity"),
+    servingUnit: text("serving_unit").references(() => inventoryUnits.code),
+    labelIngredients: text("label_ingredients"),
+    labelDirections: text("label_directions"),
+    labelWarnings: text("label_warnings"),
+    allergens: text("allergens"),
+    storageInstructions: text("storage_instructions"),
+    countryOfOrigin: text("country_of_origin"),
+    houseBlendFormulationId: uuid("house_blend_formulation_id"),
+    notes: text("notes"),
+    archivedAt: stamp("archived_at"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_products_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_products_brand",
+      columns: [t.organizationId, t.brandId],
+      foreignColumns: [inventoryBrands.organizationId, inventoryBrands.id],
+    }),
+    foreignKey({
+      name: "inventory_products_manufacturer",
+      columns: [t.organizationId, t.manufacturerId],
+      foreignColumns: [inventoryBusinesses.organizationId, inventoryBusinesses.id],
+    }),
+    foreignKey({
+      name: "inventory_products_distributor",
+      columns: [t.organizationId, t.distributorId],
+      foreignColumns: [inventoryBusinesses.organizationId, inventoryBusinesses.id],
+    }),
+    foreignKey({
+      name: "inventory_products_house_blend",
+      columns: [t.organizationId, t.houseBlendFormulationId],
+      foreignColumns: [inventoryFormulations.organizationId, inventoryFormulations.id],
+    }),
+  ],
+);
+
+export const inventoryProductComponents = pgTable(
+  "inventory_product_components",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    productId: uuid("product_id").notNull(),
+    materialId: uuid("material_id").notNull(),
+    /** All four null: in there, amount not stated. */
+    quantity: numeric("quantity", { precision: 18, scale: 8 }),
+    unit: text("unit").references(() => inventoryUnits.code),
+    perQuantity: numeric("per_quantity", { precision: 18, scale: 8 }),
+    perUnit: text("per_unit").references(() => inventoryUnits.code),
+    notes: text("notes"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_product_components_once").on(t.organizationId, t.productId, t.materialId),
+    foreignKey({
+      name: "inventory_product_components_product",
+      columns: [t.organizationId, t.productId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_product_components_material",
+      columns: [t.organizationId, t.materialId],
+      foreignColumns: [inventoryMaterials.organizationId, inventoryMaterials.id],
+    }),
+  ],
+);
+
+export const inventoryOffers = pgTable(
+  "inventory_offers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    vendorId: uuid("vendor_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    vendorSku: text("vendor_sku"),
+    url: text("url"),
+    packageQuantity: quantity("package_quantity"),
+    packageUnit: text("package_unit").references(() => inventoryUnits.code),
+    price: money("price"),
+    currency: char("currency", { length: 3 }).notNull().default("CAD"),
+    priceCheckedAt: stamp("price_checked_at"),
+    stockStatus: text("stock_status")
+      .$type<"in_stock" | "low_stock" | "out_of_stock" | "discontinued" | "unknown">()
+      .notNull()
+      .default("unknown"),
+    stockCheckedAt: stamp("stock_checked_at"),
+    leadTimeDays: integer("lead_time_days"),
+    leadTimeBasis: text("lead_time_basis").$type<"stated" | "observed" | "estimated" | "unknown">().notNull().default("unknown"),
+    minimumOrder: text("minimum_order"),
+    notes: text("notes"),
+    archivedAt: stamp("archived_at"),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_offers_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_offers_vendor",
+      columns: [t.organizationId, t.vendorId],
+      foreignColumns: [inventoryBusinesses.organizationId, inventoryBusinesses.id],
+    }),
+    foreignKey({
+      name: "inventory_offers_product",
+      columns: [t.organizationId, t.productId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }),
+  ],
+);
+
+export const inventorySourcingPreferences = pgTable(
+  "inventory_sourcing_preferences",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    materialId: uuid("material_id"),
+    productId: uuid("product_id"),
+    /** 1 is preferred; 2 and on are the alternatives, in order. */
+    rank: smallint("rank").notNull(),
+    vendorId: uuid("vendor_id").notNull(),
+    offerId: uuid("offer_id"),
+    reason: text("reason"),
+    active: boolean("active").notNull().default(true),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_sourcing_preferences_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_sourcing_preferences_material",
+      columns: [t.organizationId, t.materialId],
+      foreignColumns: [inventoryMaterials.organizationId, inventoryMaterials.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_sourcing_preferences_product",
+      columns: [t.organizationId, t.productId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_sourcing_preferences_vendor",
+      columns: [t.organizationId, t.vendorId],
+      foreignColumns: [inventoryBusinesses.organizationId, inventoryBusinesses.id],
+    }),
+    foreignKey({
+      name: "inventory_sourcing_preferences_offer",
+      columns: [t.organizationId, t.offerId],
+      foreignColumns: [inventoryOffers.organizationId, inventoryOffers.id],
+    }).onDelete("cascade"),
+  ],
+);
+
+export const inventoryOrders = pgTable(
+  "inventory_orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    vendorId: uuid("vendor_id").notNull(),
+    /** The vendor's iD as it was when recorded, for the paperwork; the link is vendor_id. */
+    vendorCode: text("vendor_code"),
+    orderNumber: text("order_number"),
+    invoiceNumber: text("invoice_number"),
+    orderedOn: date("ordered_on"),
+    expectedOn: date("expected_on"),
+    status: text("status")
+      .$type<"draft" | "placed" | "partially_received" | "received" | "cancelled" | "disputed">()
+      .notNull()
+      .default("placed"),
+    currency: char("currency", { length: 3 }).notNull().default("CAD"),
+    subtotal: money("subtotal"),
+    discount: money("discount"),
+    shipping: money("shipping"),
+    tax: money("tax"),
+    total: money("total"),
+    notes: text("notes"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_orders_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_orders_vendor",
+      columns: [t.organizationId, t.vendorId],
+      foreignColumns: [inventoryBusinesses.organizationId, inventoryBusinesses.id],
+    }),
+  ],
+);
+
+export const inventoryOrderLines = pgTable(
+  "inventory_order_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    orderId: uuid("order_id").notNull(),
+    position: integer("position").notNull().default(0),
+    description: text("description").notNull(),
+    vendorSku: text("vendor_sku"),
+    offerId: uuid("offer_id"),
+    productId: uuid("product_id"),
+    /** How many packages — a count, never a mass. */
+    packages: numeric("packages", { precision: 10, scale: 3 }).notNull(),
+    packageQuantity: quantity("package_quantity"),
+    packageUnit: text("package_unit").references(() => inventoryUnits.code),
+    unitPrice: numeric("unit_price", { precision: 12, scale: 4 }),
+    lineTotal: money("line_total"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_order_lines_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_order_lines_order",
+      columns: [t.organizationId, t.orderId],
+      foreignColumns: [inventoryOrders.organizationId, inventoryOrders.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_order_lines_offer",
+      columns: [t.organizationId, t.offerId],
+      foreignColumns: [inventoryOffers.organizationId, inventoryOffers.id],
+    }),
+    foreignKey({
+      name: "inventory_order_lines_product",
+      columns: [t.organizationId, t.productId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }),
+  ],
+);
+
+export const inventoryReceipts = pgTable(
+  "inventory_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    orderId: uuid("order_id"),
+    receivedOn: date("received_on").notNull().defaultNow(),
+    receivedBy: uuid("received_by").references(() => users.id),
+    idempotencyKey: text("idempotency_key"),
+    notes: text("notes"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_receipts_org_id").on(t.organizationId, t.id),
+    unique("inventory_receipts_once").on(t.organizationId, t.idempotencyKey),
+    foreignKey({
+      name: "inventory_receipts_order",
+      columns: [t.organizationId, t.orderId],
+      foreignColumns: [inventoryOrders.organizationId, inventoryOrders.id],
+    }),
+  ],
+);
+
+export const inventoryReceiptLines = pgTable(
+  "inventory_receipt_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    receiptId: uuid("receipt_id").notNull(),
+    orderLineId: uuid("order_line_id"),
+    productId: uuid("product_id").notNull(),
+    packagesAccepted: numeric("packages_accepted", { precision: 10, scale: 3 }).notNull(),
+    packagesRejected: numeric("packages_rejected", { precision: 10, scale: 3 }).notNull().default("0"),
+    condition: text("condition")
+      .$type<"ok" | "damaged" | "wrong_item" | "substituted" | "short">()
+      .notNull()
+      .default("ok"),
+    notes: text("notes"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_receipt_lines_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_receipt_lines_receipt",
+      columns: [t.organizationId, t.receiptId],
+      foreignColumns: [inventoryReceipts.organizationId, inventoryReceipts.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_receipt_lines_order_line",
+      columns: [t.organizationId, t.orderLineId],
+      foreignColumns: [inventoryOrderLines.organizationId, inventoryOrderLines.id],
+    }),
+    foreignKey({
+      name: "inventory_receipt_lines_product",
+      columns: [t.organizationId, t.productId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }),
+  ],
+);
+
+export const inventoryLocations = pgTable(
+  "inventory_locations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    name: text("name").notNull(),
+    description: text("description"),
+    archivedAt: stamp("archived_at"),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [unique("inventory_locations_org_id").on(t.organizationId, t.id)],
+);
+
+export const inventoryLots = pgTable(
+  "inventory_lots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    productId: uuid("product_id").notNull(),
+    lotCode: text("lot_code"),
+    /** The date exactly as printed, beside the parsed one. */
+    expiryPrinted: text("expiry_printed"),
+    expiryKind: text("expiry_kind").$type<"best_before" | "expiry" | "use_by" | "unknown">(),
+    expiryDate: date("expiry_date"),
+    manufacturedOn: date("manufactured_on"),
+    /** The age stock is used in, oldest first; never reset by moving it. */
+    acquiredOn: date("acquired_on"),
+    acquiredOnEstimated: boolean("acquired_on_estimated").notNull().default(false),
+    receiptLineId: uuid("receipt_line_id"),
+    hold: text("hold").$type<"none" | "review" | "quarantine" | "discarded">().notNull().default("none"),
+    holdReason: text("hold_reason"),
+    notes: text("notes"),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_lots_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_lots_product",
+      columns: [t.organizationId, t.productId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }),
+    foreignKey({
+      name: "inventory_lots_receipt_line",
+      columns: [t.organizationId, t.receiptLineId],
+      foreignColumns: [inventoryReceiptLines.organizationId, inventoryReceiptLines.id],
+    }),
+  ],
+);
+
+/** One physical container. Two identical jars are two rows. */
+export const inventoryContainers = pgTable(
+  "inventory_containers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    lotId: uuid("lot_id").notNull(),
+    locationId: uuid("location_id"),
+    code: text("code"),
+    status: text("status").$type<"sealed" | "open" | "empty" | "disposed">().notNull().default("sealed"),
+    dimension: text("dimension").$type<"mass" | "volume" | "count">().notNull().default("mass"),
+    /** What the label says it held when new — NOT what is left. */
+    nominalQuantity: quantity("nominal_quantity"),
+    nominalUnit: text("nominal_unit").references(() => inventoryUnits.code),
+    tareG: numeric("tare_g", { precision: 12, scale: 3 }),
+    tareBasis: text("tare_basis").$type<"measured" | "estimated" | "unknown">().notNull().default("unknown"),
+    openedOn: date("opened_on"),
+    emptiedOn: date("emptied_on"),
+    notes: text("notes"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_containers_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_containers_lot",
+      columns: [t.organizationId, t.lotId],
+      foreignColumns: [inventoryLots.organizationId, inventoryLots.id],
+    }),
+    foreignKey({
+      name: "inventory_containers_location",
+      columns: [t.organizationId, t.locationId],
+      foreignColumns: [inventoryLocations.organizationId, inventoryLocations.id],
+    }),
+  ],
+);
+
+/** One sitting with a phone in front of one container; confirmed once. */
+export const inventoryCaptures = pgTable(
+  "inventory_captures",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    status: text("status").$type<"open" | "confirmed" | "abandoned">().notNull().default("open"),
+    containerId: uuid("container_id"),
+    outcome: text("outcome").$type<"new_container" | "existing_container">(),
+    confirmedBy: uuid("confirmed_by").references(() => users.id),
+    confirmedAt: stamp("confirmed_at"),
+    notes: text("notes"),
+    createdBy: uuid("created_by").notNull().references(() => users.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_captures_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_captures_container",
+      columns: [t.organizationId, t.containerId],
+      foreignColumns: [inventoryContainers.organizationId, inventoryContainers.id],
+    }),
+  ],
+);
+
+export const inventoryDocuments = pgTable(
+  "inventory_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    /** The capture this file was first uploaded in. Which captures use it: inventory_document_links. */
+    captureId: uuid("capture_id"),
+    kind: text("kind").$type<"photo" | "invoice" | "receipt" | "packing_slip" | "certificate" | "other">().notNull(),
+    contentType: text("content_type").notNull(),
+    /** inventory/<organization id>/<random>.<ext> — made by the portal, never by a request. */
+    storageKey: text("storage_key").notNull().unique("inventory_documents_storage_key"),
+    byteSize: bigint("byte_size", { mode: "number" }).notNull(),
+    sha256: sha256("sha256").notNull(),
+    originalName: text("original_name"),
+    capturedAt: stamp("captured_at"),
+    state: text("state").$type<"pending" | "stored" | "failed">().notNull().default("pending"),
+    error: text("error"),
+    uploadedBy: uuid("uploaded_by").notNull().references(() => users.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_documents_org_id").on(t.organizationId, t.id),
+    unique("inventory_documents_same_file").on(t.organizationId, t.sha256),
+    foreignKey({
+      name: "inventory_documents_capture",
+      columns: [t.organizationId, t.captureId],
+      foreignColumns: [inventoryCaptures.organizationId, inventoryCaptures.id],
+    }),
+  ],
+);
+
+/**
+ * What a document is evidence of — exactly one record per link, each link once.
+ * A capture's photos are the documents linked to it: one file (one sha256) can
+ * serve several captures and several containers.
+ */
+export const inventoryDocumentLinks = pgTable(
+  "inventory_document_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    documentId: uuid("document_id").notNull(),
+    captureId: uuid("capture_id"),
+    productId: uuid("product_id"),
+    lotId: uuid("lot_id"),
+    containerId: uuid("container_id"),
+    orderId: uuid("order_id"),
+    businessId: uuid("business_id"),
+    offerId: uuid("offer_id"),
+    role: text("role"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_document_links_once")
+      .on(t.organizationId, t.documentId, t.captureId, t.productId, t.lotId, t.containerId, t.orderId, t.businessId, t.offerId)
+      .nullsNotDistinct(),
+    foreignKey({
+      name: "inventory_document_links_document",
+      columns: [t.organizationId, t.documentId],
+      foreignColumns: [inventoryDocuments.organizationId, inventoryDocuments.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_document_links_capture",
+      columns: [t.organizationId, t.captureId],
+      foreignColumns: [inventoryCaptures.organizationId, inventoryCaptures.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_document_links_product",
+      columns: [t.organizationId, t.productId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_document_links_lot",
+      columns: [t.organizationId, t.lotId],
+      foreignColumns: [inventoryLots.organizationId, inventoryLots.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_document_links_container",
+      columns: [t.organizationId, t.containerId],
+      foreignColumns: [inventoryContainers.organizationId, inventoryContainers.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_document_links_order",
+      columns: [t.organizationId, t.orderId],
+      foreignColumns: [inventoryOrders.organizationId, inventoryOrders.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_document_links_business",
+      columns: [t.organizationId, t.businessId],
+      foreignColumns: [inventoryBusinesses.organizationId, inventoryBusinesses.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_document_links_offer",
+      columns: [t.organizationId, t.offerId],
+      foreignColumns: [inventoryOffers.organizationId, inventoryOffers.id],
+    }).onDelete("cascade"),
+  ],
+);
+
+export const inventoryExtractions = pgTable(
+  "inventory_extractions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    captureId: uuid("capture_id"),
+    documentId: uuid("document_id"),
+    /** The real model or service that read the photos; a fixture says so here. */
+    engine: text("engine").notNull(),
+    status: text("status").$type<"queued" | "running" | "needs_review" | "reviewed" | "failed">().notNull().default("queued"),
+    rawOutput: jsonb("raw_output"),
+    error: text("error"),
+    startedAt: stamp("started_at"),
+    finishedAt: stamp("finished_at"),
+    reviewedBy: uuid("reviewed_by").references(() => users.id),
+    reviewedAt: stamp("reviewed_at"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_extractions_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_extractions_capture",
+      columns: [t.organizationId, t.captureId],
+      foreignColumns: [inventoryCaptures.organizationId, inventoryCaptures.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_extractions_document",
+      columns: [t.organizationId, t.documentId],
+      foreignColumns: [inventoryDocuments.organizationId, inventoryDocuments.id],
+    }).onDelete("cascade"),
+  ],
+);
+
+export const inventoryExtractedFields = pgTable(
+  "inventory_extracted_fields",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    extractionId: uuid("extraction_id").notNull(),
+    documentId: uuid("document_id"),
+    field: text("field").notNull(),
+    rawText: text("raw_text"),
+    value: jsonb("value"),
+    sourceLocator: jsonb("source_locator"),
+    confidence: numeric("confidence", { precision: 4, scale: 3 }),
+    review: text("review").$type<"pending" | "accepted" | "corrected" | "rejected">().notNull().default("pending"),
+    correctedValue: jsonb("corrected_value"),
+    reviewedAt: stamp("reviewed_at"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_extracted_fields_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_extracted_fields_extraction",
+      columns: [t.organizationId, t.extractionId],
+      foreignColumns: [inventoryExtractions.organizationId, inventoryExtractions.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_extracted_fields_document",
+      columns: [t.organizationId, t.documentId],
+      foreignColumns: [inventoryDocuments.organizationId, inventoryDocuments.id],
+    }).onDelete("cascade"),
+  ],
+);
+
+export const inventoryMatchCandidates = pgTable(
+  "inventory_match_candidates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    extractionId: uuid("extraction_id").notNull(),
+    target: text("target").$type<"product" | "brand" | "material" | "company" | "container">().notNull(),
+    productId: uuid("product_id"),
+    brandId: uuid("brand_id"),
+    materialId: uuid("material_id"),
+    businessId: uuid("business_id"),
+    companyId: uuid("company_id").references(() => organizations.id),
+    containerId: uuid("container_id"),
+    /** A new record to create, when there is nothing existing to point at. */
+    proposed: jsonb("proposed"),
+    score: numeric("score", { precision: 4, scale: 3 }),
+    evidence: text("evidence"),
+    decision: text("decision").$type<"pending" | "accepted" | "rejected" | "deferred" | "created">().notNull().default("pending"),
+    decidedBy: uuid("decided_by").references(() => users.id),
+    decidedAt: stamp("decided_at"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_match_candidates_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_match_candidates_extraction",
+      columns: [t.organizationId, t.extractionId],
+      foreignColumns: [inventoryExtractions.organizationId, inventoryExtractions.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_match_candidates_product",
+      columns: [t.organizationId, t.productId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_match_candidates_brand",
+      columns: [t.organizationId, t.brandId],
+      foreignColumns: [inventoryBrands.organizationId, inventoryBrands.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_match_candidates_material",
+      columns: [t.organizationId, t.materialId],
+      foreignColumns: [inventoryMaterials.organizationId, inventoryMaterials.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_match_candidates_business",
+      columns: [t.organizationId, t.businessId],
+      foreignColumns: [inventoryBusinesses.organizationId, inventoryBusinesses.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_match_candidates_container",
+      columns: [t.organizationId, t.containerId],
+      foreignColumns: [inventoryContainers.organizationId, inventoryContainers.id],
+    }).onDelete("cascade"),
+  ],
+);
+
+/** A weighing. Gross minus tare is net; without a tare, net is unknown or an estimate. */
+export const inventoryMeasurements = pgTable(
+  "inventory_measurements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    containerId: uuid("container_id").notNull(),
+    measuredAt: stamp("measured_at").notNull().defaultNow(),
+    grossG: numeric("gross_g", { precision: 12, scale: 3 }),
+    tareG: numeric("tare_g", { precision: 12, scale: 3 }),
+    tareBasis: text("tare_basis").$type<"measured" | "estimated">(),
+    netG: numeric("net_g", { precision: 12, scale: 3 }),
+    method: text("method").$type<"scale" | "label" | "visual_estimate" | "calculated">().notNull(),
+    confidence: text("confidence").$type<"exact" | "estimated" | "rough">().notNull(),
+    documentId: uuid("document_id"),
+    measuredBy: uuid("measured_by").references(() => users.id),
+    notes: text("notes"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_measurements_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_measurements_container",
+      columns: [t.organizationId, t.containerId],
+      foreignColumns: [inventoryContainers.organizationId, inventoryContainers.id],
+    }),
+    foreignKey({
+      name: "inventory_measurements_document",
+      columns: [t.organizationId, t.documentId],
+      foreignColumns: [inventoryDocuments.organizationId, inventoryDocuments.id],
+    }),
+  ],
+);
+
+export const inventoryProductNutrients = pgTable(
+  "inventory_product_nutrients",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    productId: uuid("product_id").notNull(),
+    nutrientId: uuid("nutrient_id").notNull(),
+    amount: numeric("amount", { precision: 18, scale: 6 }),
+    unit: text("unit").references(() => inventoryUnits.code),
+    amountPrinted: text("amount_printed"),
+    perQuantity: quantity("per_quantity").notNull(),
+    perUnit: text("per_unit").notNull().references(() => inventoryUnits.code),
+    source: text("source").$type<"label" | "vendor" | "document" | "calculated" | "user">().notNull(),
+    documentId: uuid("document_id"),
+    notes: text("notes"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_product_nutrients_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_product_nutrients_product",
+      columns: [t.organizationId, t.productId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_product_nutrients_nutrient",
+      columns: [t.organizationId, t.nutrientId],
+      foreignColumns: [inventoryNutrients.organizationId, inventoryNutrients.id],
+    }),
+    foreignKey({
+      name: "inventory_product_nutrients_document",
+      columns: [t.organizationId, t.documentId],
+      foreignColumns: [inventoryDocuments.organizationId, inventoryDocuments.id],
+    }),
+  ],
+);
+
+export const inventoryProductClaims = pgTable(
+  "inventory_product_claims",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    productId: uuid("product_id").notNull(),
+    lotId: uuid("lot_id"),
+    claim: text("claim").notNull(),
+    wording: text("wording"),
+    source: text("source").$type<"label" | "vendor" | "document" | "verified" | "user">().notNull(),
+    documentId: uuid("document_id"),
+    notes: text("notes"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_product_claims_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_product_claims_product",
+      columns: [t.organizationId, t.productId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_product_claims_lot",
+      columns: [t.organizationId, t.lotId],
+      foreignColumns: [inventoryLots.organizationId, inventoryLots.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_product_claims_document",
+      columns: [t.organizationId, t.documentId],
+      foreignColumns: [inventoryDocuments.organizationId, inventoryDocuments.id],
+    }),
+  ],
+);
+
+export const inventoryOfferPrices = pgTable(
+  "inventory_offer_prices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    offerId: uuid("offer_id").notNull(),
+    observedOn: date("observed_on").notNull().defaultNow(),
+    price: money("price").notNull(),
+    currency: char("currency", { length: 3 }).notNull().default("CAD"),
+    source: text("source").$type<"invoice" | "website" | "in_store" | "quote" | "manual">().notNull(),
+    orderLineId: uuid("order_line_id"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_offer_prices_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_offer_prices_offer",
+      columns: [t.organizationId, t.offerId],
+      foreignColumns: [inventoryOffers.organizationId, inventoryOffers.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_offer_prices_order_line",
+      columns: [t.organizationId, t.orderLineId],
+      foreignColumns: [inventoryOrderLines.organizationId, inventoryOrderLines.id],
+    }),
+  ],
+);
+
+/** Editable as a draft; frozen once active or retired. */
+export const inventoryFormulationVersions = pgTable(
+  "inventory_formulation_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    formulationId: uuid("formulation_id").notNull(),
+    label: text("label").notNull(),
+    revisionDate: date("revision_date"),
+    status: text("status").$type<"draft" | "active" | "retired">().notNull().default("draft"),
+    servingQuantity: quantity("serving_quantity"),
+    servingUnit: text("serving_unit").references(() => inventoryUnits.code),
+    defaultBatchServings: numeric("default_batch_servings", { precision: 12, scale: 2 }),
+    sourceDocumentId: uuid("source_document_id"),
+    notes: text("notes"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_formulation_versions_org_id").on(t.organizationId, t.id),
+    unique("inventory_formulation_versions_label").on(t.organizationId, t.formulationId, t.label),
+    foreignKey({
+      name: "inventory_formulation_versions_formulation",
+      columns: [t.organizationId, t.formulationId],
+      foreignColumns: [inventoryFormulations.organizationId, inventoryFormulations.id],
+    }),
+    foreignKey({
+      name: "inventory_formulation_versions_document",
+      columns: [t.organizationId, t.sourceDocumentId],
+      foreignColumns: [inventoryDocuments.organizationId, inventoryDocuments.id],
+    }),
+  ],
+);
+
+export const inventoryFormulationLines = pgTable(
+  "inventory_formulation_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    versionId: uuid("version_id").notNull(),
+    materialId: uuid("material_id").notNull(),
+    role: text("role").$type<"batch" | "required_addition" | "optional_addition">().notNull().default("batch"),
+    /** Per serving. */
+    quantity: numeric("quantity", { precision: 18, scale: 8 }).notNull(),
+    unit: text("unit").notNull().references(() => inventoryUnits.code),
+    preferredProductId: uuid("preferred_product_id"),
+    position: integer("position").notNull().default(0),
+    notes: text("notes"),
+    createdAt,
+  },
+  (t) => [
+    unique("inventory_formulation_lines_org_id").on(t.organizationId, t.id),
+    unique("inventory_formulation_lines_once").on(t.organizationId, t.versionId, t.materialId, t.role),
+    foreignKey({
+      name: "inventory_formulation_lines_version",
+      columns: [t.organizationId, t.versionId],
+      foreignColumns: [inventoryFormulationVersions.organizationId, inventoryFormulationVersions.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_formulation_lines_material",
+      columns: [t.organizationId, t.materialId],
+      foreignColumns: [inventoryMaterials.organizationId, inventoryMaterials.id],
+    }),
+    foreignKey({
+      name: "inventory_formulation_lines_product",
+      columns: [t.organizationId, t.preferredProductId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }),
+  ],
+);
+
+export const inventoryBatchPlans = pgTable(
+  "inventory_batch_plans",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    versionId: uuid("version_id").notNull(),
+    plannedFor: date("planned_for").notNull(),
+    servings: numeric("servings", { precision: 12, scale: 2 }).notNull(),
+    status: text("status").$type<"planned" | "committed" | "made" | "cancelled">().notNull().default("planned"),
+    includeOptional: boolean("include_optional").notNull().default(false),
+    notes: text("notes"),
+    createdBy: uuid("created_by").references(() => users.id),
+    /** The moment of the insert: plans on one date draw on stock in this order. */
+    createdAt: stamp("created_at").notNull().default(sql`clock_timestamp()`),
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_batch_plans_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_batch_plans_version",
+      columns: [t.organizationId, t.versionId],
+      foreignColumns: [inventoryFormulationVersions.organizationId, inventoryFormulationVersions.id],
+    }),
+  ],
+);
+
+export const inventoryReservations = pgTable(
+  "inventory_reservations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    planId: uuid("plan_id").notNull(),
+    containerId: uuid("container_id").notNull(),
+    materialId: uuid("material_id").notNull(),
+    quantity: quantity("quantity").notNull(),
+    unit: text("unit").notNull().references(() => inventoryUnits.code),
+    releasedAt: stamp("released_at"),
+    createdBy: uuid("created_by").references(() => users.id),
+    /** The moment of the insert: on an over-reserved container, earliest is served first. */
+    createdAt: stamp("created_at").notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [
+    unique("inventory_reservations_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_reservations_plan",
+      columns: [t.organizationId, t.planId],
+      foreignColumns: [inventoryBatchPlans.organizationId, inventoryBatchPlans.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_reservations_container",
+      columns: [t.organizationId, t.containerId],
+      foreignColumns: [inventoryContainers.organizationId, inventoryContainers.id],
+    }),
+    foreignKey({
+      name: "inventory_reservations_material",
+      columns: [t.organizationId, t.materialId],
+      foreignColumns: [inventoryMaterials.organizationId, inventoryMaterials.id],
+    }),
+  ],
+);
+
+export const inventoryBatches = pgTable(
+  "inventory_batches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    versionId: uuid("version_id").notNull(),
+    planId: uuid("plan_id"),
+    madeOn: date("made_on").notNull(),
+    servingsMade: numeric("servings_made", { precision: 12, scale: 2 }),
+    outputG: numeric("output_g", { precision: 12, scale: 3 }),
+    wastageG: numeric("wastage_g", { precision: 12, scale: 3 }),
+    outputLotId: uuid("output_lot_id"),
+    notes: text("notes"),
+    madeBy: uuid("made_by").references(() => users.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_batches_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_batches_version",
+      columns: [t.organizationId, t.versionId],
+      foreignColumns: [inventoryFormulationVersions.organizationId, inventoryFormulationVersions.id],
+    }),
+    foreignKey({
+      name: "inventory_batches_plan",
+      columns: [t.organizationId, t.planId],
+      foreignColumns: [inventoryBatchPlans.organizationId, inventoryBatchPlans.id],
+    }),
+    foreignKey({
+      name: "inventory_batches_output_lot",
+      columns: [t.organizationId, t.outputLotId],
+      foreignColumns: [inventoryLots.organizationId, inventoryLots.id],
+    }),
+  ],
+);
+
+export type InventoryMovementKind =
+  | "opening"
+  | "receipt"
+  | "fill"
+  | "production_output"
+  | "count"
+  | "production_use"
+  | "adjustment"
+  | "loss"
+  | "disposal"
+  | "transfer_in"
+  | "transfer_out"
+  | "return"
+  | "reversal";
+
+export type InventoryQuantityBasis = "labelled_unopened" | "measured" | "estimated" | "calculated" | "unknown";
+
+/**
+ * The ledger. Append-only for the application role (SELECT and INSERT only);
+ * a mistake is voided by a reversal. See 0048 for the anchor/change rules.
+ */
+export const inventoryMovements = pgTable(
+  "inventory_movements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    containerId: uuid("container_id").notNull(),
+    occurredAt: stamp("occurred_at").notNull().defaultNow(),
+    kind: text("kind").$type<InventoryMovementKind>().notNull(),
+    /** Null only when the amount is unknown (an opening) or for a reversal. */
+    quantity: quantity("quantity"),
+    unit: text("unit").references(() => inventoryUnits.code),
+    basis: text("basis").$type<InventoryQuantityBasis>(),
+    captureId: uuid("capture_id"),
+    measurementId: uuid("measurement_id"),
+    receiptLineId: uuid("receipt_line_id"),
+    batchId: uuid("batch_id"),
+    reversesId: uuid("reverses_id"),
+    idempotencyKey: text("idempotency_key"),
+    recordedBy: uuid("recorded_by").references(() => users.id),
+    note: text("note"),
+    createdAt: stamp("created_at").notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [
+    unique("inventory_movements_org_id").on(t.organizationId, t.id),
+    unique("inventory_movements_idempotency").on(t.organizationId, t.idempotencyKey),
+    unique("inventory_movements_reversed_once").on(t.organizationId, t.reversesId),
+    foreignKey({
+      name: "inventory_movements_container",
+      columns: [t.organizationId, t.containerId],
+      foreignColumns: [inventoryContainers.organizationId, inventoryContainers.id],
+    }),
+    foreignKey({
+      name: "inventory_movements_capture",
+      columns: [t.organizationId, t.captureId],
+      foreignColumns: [inventoryCaptures.organizationId, inventoryCaptures.id],
+    }),
+    foreignKey({
+      name: "inventory_movements_measurement",
+      columns: [t.organizationId, t.measurementId],
+      foreignColumns: [inventoryMeasurements.organizationId, inventoryMeasurements.id],
+    }),
+    foreignKey({
+      name: "inventory_movements_receipt_line",
+      columns: [t.organizationId, t.receiptLineId],
+      foreignColumns: [inventoryReceiptLines.organizationId, inventoryReceiptLines.id],
+    }),
+    foreignKey({
+      name: "inventory_movements_batch",
+      columns: [t.organizationId, t.batchId],
+      foreignColumns: [inventoryBatches.organizationId, inventoryBatches.id],
+    }),
+    foreignKey({
+      name: "inventory_movements_reverses",
+      columns: [t.organizationId, t.reversesId],
+      foreignColumns: [t.organizationId, t.id],
+    }),
+  ],
+);
+
+export const inventoryNotes = pgTable(
+  "inventory_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    materialId: uuid("material_id"),
+    productId: uuid("product_id"),
+    brandId: uuid("brand_id"),
+    businessId: uuid("business_id"),
+    offerId: uuid("offer_id"),
+    body: text("body").notNull(),
+    rating: smallint("rating"),
+    notedOn: date("noted_on").notNull().defaultNow(),
+    writtenBy: uuid("written_by").references(() => users.id),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_notes_org_id").on(t.organizationId, t.id),
+    foreignKey({
+      name: "inventory_notes_material",
+      columns: [t.organizationId, t.materialId],
+      foreignColumns: [inventoryMaterials.organizationId, inventoryMaterials.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_notes_product",
+      columns: [t.organizationId, t.productId],
+      foreignColumns: [inventoryProducts.organizationId, inventoryProducts.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_notes_brand",
+      columns: [t.organizationId, t.brandId],
+      foreignColumns: [inventoryBrands.organizationId, inventoryBrands.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_notes_business",
+      columns: [t.organizationId, t.businessId],
+      foreignColumns: [inventoryBusinesses.organizationId, inventoryBusinesses.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inventory_notes_offer",
+      columns: [t.organizationId, t.offerId],
+      foreignColumns: [inventoryOffers.organizationId, inventoryOffers.id],
+    }).onDelete("cascade"),
+  ],
+);
+
+export type InventoryPurchaseStatus =
+  | "proposed"
+  | "approved"
+  | "in_cart"
+  | "ordered"
+  | "rejected"
+  | "cancelled"
+  | "failed";
+
+export const inventoryPurchaseIntents = pgTable(
+  "inventory_purchase_intents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    offerId: uuid("offer_id").notNull(),
+    packages: numeric("packages", { precision: 10, scale: 3 }).notNull(),
+    planId: uuid("plan_id"),
+    materialId: uuid("material_id"),
+    reason: text("reason"),
+    /** The inputs and result behind the proposal, exactly as shown when approved. */
+    calculation: jsonb("calculation"),
+    status: text("status").$type<InventoryPurchaseStatus>().notNull().default("proposed"),
+    proposedBy: uuid("proposed_by").references(() => users.id),
+    approvedBy: uuid("approved_by").references(() => users.id),
+    approvedAt: stamp("approved_at"),
+    cartReference: text("cart_reference"),
+    cartedAt: stamp("carted_at"),
+    orderId: uuid("order_id"),
+    expectedTotal: money("expected_total"),
+    currency: char("currency", { length: 3 }).notNull().default("CAD"),
+    error: text("error"),
+    idempotencyKey: text("idempotency_key"),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    unique("inventory_purchase_intents_org_id").on(t.organizationId, t.id),
+    unique("inventory_purchase_intents_once").on(t.organizationId, t.idempotencyKey),
+    foreignKey({
+      name: "inventory_purchase_intents_offer",
+      columns: [t.organizationId, t.offerId],
+      foreignColumns: [inventoryOffers.organizationId, inventoryOffers.id],
+    }),
+    foreignKey({
+      name: "inventory_purchase_intents_plan",
+      columns: [t.organizationId, t.planId],
+      foreignColumns: [inventoryBatchPlans.organizationId, inventoryBatchPlans.id],
+    }),
+    foreignKey({
+      name: "inventory_purchase_intents_material",
+      columns: [t.organizationId, t.materialId],
+      foreignColumns: [inventoryMaterials.organizationId, inventoryMaterials.id],
+    }),
+    foreignKey({
+      name: "inventory_purchase_intents_order",
+      columns: [t.organizationId, t.orderId],
+      foreignColumns: [inventoryOrders.organizationId, inventoryOrders.id],
+    }),
+  ],
+);
+
+/* Views (0048). Read-only, and each runs with the caller's rights, so the
+   tenant policies of the tables beneath apply. Declared here for typed reads. */
+
+export const inventoryBusinessDirectory = pgView("inventory_business_directory", {
+  organizationId: uuid("organization_id").notNull(),
+  businessId: uuid("business_id").notNull(),
+  companyId: uuid("company_id").notNull(),
+  name: text("name").notNull(),
+  companyType: text("company_type").notNull(),
+  /** The company's live iD, or null if it holds none. */
+  idCode: text("id_code"),
+  isVendor: boolean("is_vendor").notNull(),
+  isSupplier: boolean("is_supplier").notNull(),
+  isManufacturer: boolean("is_manufacturer").notNull(),
+  isBrandOwner: boolean("is_brand_owner").notNull(),
+  status: text("status").notNull(),
+}).existing();
+
+export const inventoryContainerBalances = pgView("inventory_container_balances", {
+  organizationId: uuid("organization_id").notNull(),
+  containerId: uuid("container_id").notNull(),
+  code: text("code"),
+  status: text("status").notNull(),
+  dimension: text("dimension").notNull(),
+  baseUnit: text("base_unit").notNull(),
+  locationId: uuid("location_id"),
+  lotId: uuid("lot_id").notNull(),
+  productId: uuid("product_id").notNull(),
+  lotCode: text("lot_code"),
+  expiryKind: text("expiry_kind"),
+  expiryDate: date("expiry_date"),
+  acquiredOn: date("acquired_on"),
+  hold: text("hold").notNull(),
+  nominalQuantity: quantity("nominal_quantity"),
+  nominalUnit: text("nominal_unit"),
+  /** Null when unknown — never zero by default. */
+  balance: numeric("balance", { precision: 18, scale: 4 }),
+  balanceBasis: text("balance_basis").$type<InventoryQuantityBasis>().notNull(),
+  balanceAsOf: stamp("balance_as_of"),
+}).existing();
+
+export const inventoryOrderLineStatus = pgView("inventory_order_line_status", {
+  organizationId: uuid("organization_id").notNull(),
+  orderId: uuid("order_id").notNull(),
+  orderLineId: uuid("order_line_id").notNull(),
+  productId: uuid("product_id"),
+  packagesOrdered: numeric("packages_ordered", { precision: 10, scale: 3 }).notNull(),
+  packagesReceived: numeric("packages_received", { precision: 10, scale: 3 }).notNull(),
+  packagesRejected: numeric("packages_rejected", { precision: 10, scale: 3 }).notNull(),
+  packagesOutstanding: numeric("packages_outstanding", { precision: 10, scale: 3 }).notNull(),
+  packageQuantity: quantity("package_quantity"),
+  packageUnit: text("package_unit"),
+  quantityOutstanding: numeric("quantity_outstanding", { precision: 18, scale: 4 }),
+}).existing();
+
+/**
+ * Per open plan and material: earliest-expiring stock first, reservations
+ * re-checked at every read (inventory_plan_requirements_rows() in 0048).
+ * `required`, `shortfall` and the allocations are NULL when a recipe line
+ * cannot be counted against its material — unknown, never smaller.
+ */
+export const inventoryPlanRequirements = pgView("inventory_plan_requirements", {
+  organizationId: uuid("organization_id").notNull(),
+  planId: uuid("plan_id").notNull(),
+  plannedFor: date("planned_for").notNull(),
+  planStatus: text("plan_status").notNull(),
+  materialId: uuid("material_id").notNull(),
+  dimension: text("dimension").notNull(),
+  baseUnit: text("base_unit").notNull(),
+  required: numeric("required", { precision: 18, scale: 4 }),
+  reservedForPlan: numeric("reserved_for_plan", { precision: 18, scale: 4 }).notNull(),
+  usableStock: numeric("usable_stock", { precision: 18, scale: 4 }).notNull(),
+  arrivingInTime: numeric("arriving_in_time", { precision: 18, scale: 4 }).notNull(),
+  neededFirstByEarlierPlans: numeric("needed_first_by_earlier_plans", { precision: 18, scale: 4 }).notNull(),
+  shortfall: numeric("shortfall", { precision: 18, scale: 4 }),
+  containersToVerify: integer("containers_to_verify").notNull(),
+  reservedValid: numeric("reserved_valid", { precision: 18, scale: 4 }).notNull(),
+  reservedUnbacked: numeric("reserved_unbacked", { precision: 18, scale: 4 }).notNull(),
+  reservationsToReview: integer("reservations_to_review").notNull(),
+  allocatedFromStock: numeric("allocated_from_stock", { precision: 18, scale: 4 }),
+  allocatedFromIncoming: numeric("allocated_from_incoming", { precision: 18, scale: 4 }),
+}).existing();
+
+export const inventoryPurchaseOptions = pgView("inventory_purchase_options", {
+  organizationId: uuid("organization_id").notNull(),
+  planId: uuid("plan_id").notNull(),
+  plannedFor: date("planned_for").notNull(),
+  materialId: uuid("material_id").notNull(),
+  baseUnit: text("base_unit").notNull(),
+  shortfall: numeric("shortfall", { precision: 18, scale: 4 }).notNull(),
+  rank: smallint("rank").notNull(),
+  vendorId: uuid("vendor_id").notNull(),
+  offerId: uuid("offer_id").notNull(),
+  productId: uuid("product_id").notNull(),
+  packageQuantity: quantity("package_quantity"),
+  packageUnit: text("package_unit"),
+  perPackage: numeric("per_package", { precision: 18, scale: 4 }).notNull(),
+  packages: numeric("packages", { precision: 10, scale: 0 }).notNull(),
+  purchased: numeric("purchased", { precision: 18, scale: 4 }).notNull(),
+  excess: numeric("excess", { precision: 18, scale: 4 }).notNull(),
+  price: money("price"),
+  currency: char("currency", { length: 3 }).notNull(),
+  estimatedCost: money("estimated_cost"),
+  priceCheckedAt: stamp("price_checked_at"),
+  stockStatus: text("stock_status").notNull(),
+  stockCheckedAt: stamp("stock_checked_at"),
+  leadTimeDays: integer("lead_time_days"),
+  leadTimeBasis: text("lead_time_basis").notNull(),
+  available: boolean("available").notNull(),
+  recommended: boolean("recommended").notNull(),
+}).existing();
