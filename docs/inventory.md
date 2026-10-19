@@ -19,13 +19,18 @@ proof.
    hidden.
 3. **Vendors, suppliers and manufacturers are companies with their own iD.**
    See below.
-4. **Stock is a ledger**, append-only for the application. Balances are derived;
-   unknown is never zero.
+4. **Stock is a ledger**, append-only for the application, and so are the
+   weighings it rests on. Balances are derived; unknown is never zero; an
+   amount is `measured` only on exact scale evidence.
 5. **A formulation version freezes when it leaves draft**, and a batch is only
    recorded from a frozen version.
-6. **A purchase is approved by a person of the business.** An agent (a service
-   account) may propose, and may move an approved purchase into a cart. Every
-   change of state is written to `audit_events`.
+6. **A purchase is approved by the person approving it**, a member of the
+   business who is not a service account, never in someone else's name. An
+   agent may propose, revise a proposal, and move an approved purchase into a
+   cart; the approved terms cannot change afterwards. Every change of state,
+   and every revision of a proposal, is written to `audit_events`.
+7. **Reservations are only as good as the stock behind them**, checked when
+   made and again at every read of the requirements.
 
 ## Companies and their iDs
 
@@ -65,6 +70,18 @@ a product names its brand, its manufacturer and its distributor separately.
 | Notes and purchasing | `inventory_notes`, `inventory_purchase_intents` |
 | Views (caller's rights) | `inventory_business_directory`, `inventory_container_balances`, `inventory_order_line_status`, `inventory_plan_requirements`, `inventory_purchase_options` |
 
+## Capture and evidence
+
+A capture is one sitting in front of one container. Its photos are the
+documents linked to it (`inventory_document_links.capture_id`). A document is
+one FILE per business (unique content hash), not one jar: the same label photo
+can be linked to several captures and, once they are confirmed, to several
+containers — two identical jars photographed once are two containers, each
+with its own opening event. Every link is made once (`UNIQUE NULLS NOT
+DISTINCT`), so retried uploads and confirmations find their link. At most one
+capture creates a container (`outcome = 'new_container'`); later captures of
+the same jar confirm it as an existing one.
+
 ## The ledger
 
 Anchor events state what a container holds: `opening` (first catalogued),
@@ -75,26 +92,58 @@ reason.
 
 A balance is the latest anchor plus the changes after it. An `opening` whose
 amount is unknown (`basis = 'unknown'`, no quantity) keeps the balance unknown
-until something is counted. Each amount carries its basis: `labelled_unopened`
-(only for a sealed container), `measured` (an anchor must link the weighing, and
-must equal its net), `estimated`, or `calculated`. A container is opened once and
-received once, whatever the retries; idempotency keys make a retried request
-find its first attempt.
+until something is counted. Each amount carries its basis:
+
+| Basis | Only when |
+| --- | --- |
+| `labelled_unopened` | The container is sealed, and the amount is its nominal contents (in any unit of the same kind: 0.5 kg = 500 g). |
+| `measured` | An anchor links a weighing of this container that is on a `scale`, `exact`, with any tare weighed too (`tare_basis = 'measured'`); the container is counted by mass; the amount equals the weighing's net. A change event citing a weighing needs the same quality. A visual or rough figure, a label reading, an estimated tare, or millilitres and items are never `measured`. |
+| `estimated` | Anything else known approximately, with or without a weighing behind it. |
+| `calculated` | Derived (production). |
+
+A container is opened once and received once, whatever the retries; idempotency
+keys make a retried request find its first attempt.
 
 A weighing stores gross, tare and net. With both gross and tare, net is their
 difference. Without a tare, net is unknown, or an explicit estimate below the
-gross; the gross is never taken as the contents.
+gross; the gross is never taken as the contents. Weighings are insert-only for
+the portal, and once a stock event rests on one nobody can change or remove it
+(`inventory_measurements_rules`): a correction is a new weighing and a new
+`count`.
 
 ## Replenishment
 
 `inventory_plan_requirements` gives, per open plan and material, the amount
-required, what the plan has reserved, usable stock, what is arriving in time,
-and the shortfall. Plans are taken in date order and each is counted once; a
-plan with a recorded batch drops out. Usable stock is sealed or open, not on
-hold, of known amount, not expired by the plan's date, and of a product whose
-composition states the material's amount. Containers of unknown amount are
-reported as `containers_to_verify`. Orders count only for what is outstanding
-and expected on or before the plan's date.
+required, its reservations, usable stock, what is arriving in time, what the
+plan is allocated, and the shortfall. It is computed by
+`inventory_plan_requirements_rows()`, with the caller's rights, the way the
+stock would really be used:
+
+1. **Demand**: every open plan (no batch recorded yet), each counted once. A
+   recipe line must be in a fixed-size unit of its material's kind (refused
+   otherwise); if one still cannot be counted, the requirement and shortfall
+   are NULL — unknown, never smaller.
+2. **Supply**: containers that are sealed or open, not on hold, of known
+   amount, of a product whose composition states the material's amount, each
+   usable up to its expiry date; and outstanding order quantities, usable from
+   their expected date (undated orders do not count). Containers of unknown
+   amount are `containers_to_verify`.
+3. **Reservations first**, earliest made first: each counts only for what its
+   container can still give that plan on the plan's date (still supply, not
+   expired by then, not already given to an earlier reservation, in a unit of
+   the material's kind). The rest is `reserved_unbacked`, counted in
+   `reservations_to_review`, and the plan shows short. A reservation is also
+   refused when it is made if it could not be honoured then
+   (`inventory_reservations_rules`, which locks the container while it checks).
+4. **Then each plan in date order** (same date: the order plans were made)
+   takes what it still needs from what is left and usable on its date,
+   earliest-expiring first, shelf before deliveries. Stock expiring between
+   two plans goes to the earlier plan instead of being counted against the
+   later one; a delivery helps only plans on or after its expected day.
+
+A plan's date is its planned date, or today if it is overdue. One known
+simplification: a product holding several materials supplies each in full,
+independently.
 
 `inventory_purchase_options` turns each shortfall into whole packages of each
 ranked offer, with the amount bought, the excess, and the dated price and stock
@@ -129,6 +178,7 @@ withdrawal that touches nothing else, run as the owner, is:
 BEGIN;
 DROP VIEW IF EXISTS inventory_purchase_options, inventory_plan_requirements,
   inventory_order_line_status, inventory_container_balances, inventory_business_directory;
+DROP FUNCTION IF EXISTS inventory_plan_requirements_rows();
 DROP TABLE IF EXISTS inventory_purchase_intents, inventory_notes, inventory_movements,
   inventory_batches, inventory_reservations, inventory_batch_plans, inventory_formulation_lines,
   inventory_formulation_versions, inventory_offer_prices, inventory_product_claims,
@@ -146,7 +196,8 @@ DROP FUNCTION IF EXISTS list_company(text), issue_company_id(uuid), reissue_comp
   next_id_code(), identities_company_rules(), listed_companies_have_no_members(),
   inventory_movements_rules(), inventory_batches_rules(), inventory_formulation_lines_rules(),
   inventory_formulation_versions_rules(), inventory_captures_rules(), inventory_orders_vendor_code(),
-  inventory_purchase_intents_rules(), inventory_sourcing_preferences_rules();
+  inventory_purchase_intents_rules(), inventory_sourcing_preferences_rules(), inventory_reservations_rules(),
+  inventory_measurements_rules();
 -- Only if no company holds an iD (otherwise keep the column: those iDs are facts):
 --   ALTER TABLE identities DROP CONSTRAINT identities_exactly_one_holder;
 --   DROP INDEX identities_one_live_per_organization;
@@ -165,6 +216,6 @@ media bucket; withdrawing the schema does not delete them.
 | Layer | State |
 | --- | --- |
 | Schema, views, functions, triggers | In this migration. |
-| Tests | `test/inventory.test.ts`: migration re-runnable, policies and views, and acceptance scenarios A02–A12 at the database level, under the restricted role. |
+| Tests | `test/inventory.test.ts`: migration re-runnable, policies and views, acceptance scenarios A02–A12 at the database level under the restricted role, and the regressions from the review of the first draft (7714b8f): reservations (R1), expiry-aware planning (R2), approvals (R3), weighing evidence (R4), shared photos (R5). |
 | Screens (capture, review, inventory list) | `10xid-com/app`, after this schema is copied there. |
 | Live database | Not applied until review and approval. |
