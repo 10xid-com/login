@@ -1,17 +1,18 @@
-# Inventory (migration 0048)
+# Inventory (migrations 0048 and 0049)
 
 What a business owns, what each thing is, where it came from, what is left of
 it, and what to order before a dated batch. The schema lives here, like every
 other table; the screens live in `10xid-com/app`. This document is the why;
-`drizzle/0048_inventory.sql` is the how, and `test/inventory.test.ts` is the
-proof.
+`drizzle/0048_inventory.sql` and `drizzle/0049_container_acquisitions.sql` are
+the how, and `test/inventory.test.ts` and `test/inventory-acquisitions.test.ts`
+are the proof.
 
 ## Rules the database enforces
 
 1. **One business's inventory is its own.** Every table but `inventory_units`
    carries `organization_id` and the tenant policy of 0001: an unscoped
    connection sees nothing, and a row can only be written into the business in
-   scope. There is no staff read policy. `scripts/check-rls.ts` lists all 35
+   scope. There is no staff read policy. `scripts/check-rls.ts` lists all 36
    tables as protected.
 2. **Rows only point at rows of the same business.** Each parent has
    `UNIQUE (organization_id, id)` and each child references that pair, so a
@@ -31,6 +32,9 @@ proof.
    and every revision of a proposal, is written to `audit_events`.
 7. **Reservations are only as good as the stock behind them**, checked when
    made and again at every read of the requirements.
+8. **How a container was bought is recorded per container, as known, and
+   kept** (0049): seller, date, price and paperwork, each optional; a
+   correction is a new record, never an edit; recording it never adds stock.
 
 ## Companies and their iDs
 
@@ -62,7 +66,7 @@ a product names its brand, its manufacturer and its distributor separately.
 | Reference | `inventory_units` (shared; mass, volume, count, energy, and unconvertible units such as drops and IU) |
 | What things are | `inventory_nutrients`, `inventory_materials` (name + specification), `inventory_material_aliases`, `inventory_products` (variant, form, package, GTIN, composition state), `inventory_product_components` (amount optional), `inventory_product_nutrients`, `inventory_product_claims` |
 | Companies | `organizations` + `identities` (shared), `inventory_businesses`, `inventory_brands` |
-| Buying | `inventory_offers` (dated price and stock status, lead time and its basis), `inventory_offer_prices`, `inventory_sourcing_preferences` (rank 1 preferred, then alternatives), `inventory_orders`, `inventory_order_lines`, `inventory_receipts`, `inventory_receipt_lines` |
+| Buying | `inventory_offers` (dated price and stock status, lead time and its basis), `inventory_offer_prices`, `inventory_sourcing_preferences` (rank 1 preferred, then alternatives), `inventory_orders`, `inventory_order_lines`, `inventory_receipts`, `inventory_receipt_lines`, `inventory_container_acquisitions` (0049: how one container was bought, with its corrections) |
 | Physical stock | `inventory_locations`, `inventory_lots` (printed and parsed dates, acquisition date, hold), `inventory_containers` (label contents kept apart from what is left), `inventory_measurements` (gross, tare, net) |
 | Capture | `inventory_captures` (one sitting, confirmed once), `inventory_documents` (private store key, content hash, upload state), `inventory_document_links`, `inventory_extractions` (named engine), `inventory_extracted_fields` (raw text, locator, confidence, review), `inventory_match_candidates` |
 | Ledger | `inventory_movements` |
@@ -150,6 +154,55 @@ ranked offer, with the amount bought, the excess, and the dated price and stock
 status. It recommends the best-ranked offer showing stock; an offer whose stock
 was never checked is listed but never recommended.
 
+## Purchases of a container (0049)
+
+`inventory_container_acquisitions` records how ONE container was acquired:
+who sold it (`vendor_id`, an `inventory_businesses` row, so a company with its
+own iD), when (`acquired_on`), for how much (`price` with `currency`), the
+paperwork (`document_id`), and optionally the order line it was bought on.
+
+- **Per container, never per lot or product.** A lot is shared by every
+  container of one product, lot code and date, so two jars of one lot bought
+  from two sellers at two prices would be misattributed on the lot
+  (`inventory_lots.receipt_line_id` stays a receiving fact). Recording a
+  purchase changes no lot, product or other container.
+- **Everything is optional, nothing is invented.** No "unknown vendor", no
+  default currency, no zero price: an unknown fact is NULL. The first record
+  of a container must say something (`..._says_something`).
+- **Price** is the price of this one package as recorded, in its currency
+  (three capital letters): a finite number, never negative (numeric `NaN` is
+  refused explicitly, since PostgreSQL sorts it above every number), never
+  without its currency and no currency without a price. Zero is stored only
+  when it was entered. No shipping or tax is shared out here.
+- **Corrections are new records.** A record is a full snapshot of what is
+  known. A correction supersedes the record it corrects (`supersedes_id`), of
+  the same container, and may clear a fact back to unknown. One first record
+  per container and each record superseded at most once make one linear
+  chain; the **current** record is the one nothing supersedes. Records are
+  kept as written: the application may only SELECT and INSERT, and
+  `inventory_container_acquisitions_kept` refuses UPDATE and DELETE even for
+  the owner. Nothing a record cites — container, seller, order line, document
+  — can be deleted from under it (foreign keys without cascade).
+- **Paperwork** must be this business's, `stored`, and already linked to the
+  container (`inventory_document_links.container_id`), so every attachment is
+  reachable through the container's links even though a record names one main
+  document. One invoice covering several jars is one document with a link per
+  jar. PDFs are allowed (0048's document types).
+- **Order lines**, when cited, decide the seller: the record's vendor is the
+  order's vendor (filled in when not given, refused when different), and a
+  line naming a product must name this container's product.
+- **Never stock.** A purchase record is not a movement and cites none;
+  recording, retrying or correcting one leaves every balance as it was. A
+  retried request finds its first attempt by `idempotency_key`, unique per
+  business.
+
+Three facts stay distinct: the seller of THIS container (its current record);
+the latest purchase of a product (the current records of its containers, by
+`acquired_on`; when dates are unknown, the application says "most recently
+recorded" rather than asserting an order); and the preferred vendor for future
+purchases (`inventory_sourcing_preferences`, rank 1), which recording a
+purchase never changes.
+
 ## Deployment and recovery
 
 The migration is one file, applied by `scripts/migrate.mjs` on the `portal`
@@ -211,11 +264,35 @@ COMMIT;
 Inventory photos are objects under `inventory/<organization id>/` in the private
 media bucket; withdrawing the schema does not delete them.
 
+### 0049
+
+Additive only: one new table with its indexes, two trigger functions, its
+grant (SELECT, INSERT) and its tenant policy. No existing table, function,
+policy or grant changes. It applies in the migrator's single transaction like
+0048. Take the same logical dump first.
+
+Withdrawal is emergency recovery only, never routine cleanup, and a forward
+fix is preferred: withdrawal deletes the purchase records themselves. The
+paperwork stays (documents and their links are 0048's), and so do the files in
+the bucket. Run as the owner:
+
+```sql
+BEGIN;
+DROP TABLE IF EXISTS inventory_container_acquisitions;
+DROP FUNCTION IF EXISTS inventory_container_acquisitions_rules(), inventory_container_acquisitions_kept();
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1790003300000;
+COMMIT;
+```
+
+A purchase record is never removed in normal operation, including after
+acceptance on the live database: retire the synthetic container the way other
+acceptance inventory is retired, and keep its purchase records as evidence.
+
 ## Status
 
 | Layer | State |
 | --- | --- |
-| Schema, views, functions, triggers | In this migration. |
-| Tests | `test/inventory.test.ts`: migration re-runnable, policies and views, acceptance scenarios A02–A12 at the database level under the restricted role, and the regressions from the review of the first draft (7714b8f): reservations (R1), expiry-aware planning (R2), approvals (R3), weighing evidence (R4), shared photos (R5). |
+| Schema, views, functions, triggers | 0048; container purchases 0049. |
+| Tests | `test/inventory.test.ts`: migration re-runnable, policies and views, acceptance scenarios A02–A12 at the database level under the restricted role, and the regressions from the review of the first draft (7714b8f): reservations (R1), expiry-aware planning (R2), approvals (R3), weighing evidence (R4), shared photos (R5). `test/inventory-acquisitions.test.ts`: 0049 re-runnable, grants and policy; two jars of one lot from two sellers; first record, corrections, clearing and the single chain; price and currency; paperwork rules; order-line seller and product; records and what they cite kept; no stock change on record, retry or reuse; isolation. |
 | Screens (capture, review, inventory list) | `10xid-com/app`, after this schema is copied there. |
-| Live database | Not applied until review and approval. |
+| Live database | 0048 applied. 0049 not applied until review and approval. |

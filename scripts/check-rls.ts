@@ -91,6 +91,7 @@ const MUST_BE_PROTECTED = [
   "inventory_movements",
   "inventory_notes",
   "inventory_purchase_intents",
+  "inventory_container_acquisitions",
 ];
 
 /** Read before a scope exists. Each entry needs a reason that survives review. */
