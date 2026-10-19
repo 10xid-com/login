@@ -167,7 +167,7 @@ export async function resetPasswordAction(form: FormData) {
   // Better Auth has removed every sign-in session of this identity
   // (revokeSessionsOnPasswordReset); the portal sessions go too, at once.
   await endPortalAccessForAddress(address.data);
-  to("/auth/sign-in", { notice: "reset", email: address.data });
+  to("/auth/sign-in", { method: "password", notice: "reset", email: address.data });
 }
 
 export async function signInWithProviderAction(form: FormData) {
