@@ -49,8 +49,10 @@ CREATE TABLE IF NOT EXISTS "inventory_container_acquisitions" (
   CONSTRAINT "inventory_container_acquisitions_document" FOREIGN KEY ("organization_id", "document_id")
     REFERENCES "inventory_documents" ("organization_id", "id"),
   -- The price of this one package as recorded (no shipping or tax shared out),
-  -- never without its currency, and no currency without a price.
-  CONSTRAINT "inventory_container_acquisitions_price" CHECK ("price" IS NULL OR "price" >= 0),
+  -- never without its currency, and no currency without a price. A number:
+  -- numeric accepts 'NaN', which PostgreSQL sorts above every number, so
+  -- ">= 0" alone would let it through (infinities are refused by the type).
+  CONSTRAINT "inventory_container_acquisitions_price" CHECK ("price" IS NULL OR ("price" >= 0 AND "price" <> 'NaN'::numeric)),
   CONSTRAINT "inventory_container_acquisitions_currency" CHECK (
     ("price" IS NULL) = ("currency" IS NULL) AND ("currency" IS NULL OR "currency" ~ '^[A-Z]{3}$')
   ),

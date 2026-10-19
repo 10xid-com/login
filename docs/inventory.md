@@ -170,9 +170,10 @@ paperwork (`document_id`), and optionally the order line it was bought on.
   default currency, no zero price: an unknown fact is NULL. The first record
   of a container must say something (`..._says_something`).
 - **Price** is the price of this one package as recorded, in its currency
-  (three capital letters), never negative, never without its currency and no
-  currency without a price. Zero is stored only when it was entered. No
-  shipping or tax is shared out here.
+  (three capital letters): a finite number, never negative (numeric `NaN` is
+  refused explicitly, since PostgreSQL sorts it above every number), never
+  without its currency and no currency without a price. Zero is stored only
+  when it was entered. No shipping or tax is shared out here.
 - **Corrections are new records.** A record is a full snapshot of what is
   known. A correction supersedes the record it corrects (`supersedes_id`), of
   the same container, and may clear a fact back to unknown. One first record
@@ -270,9 +271,10 @@ grant (SELECT, INSERT) and its tenant policy. No existing table, function,
 policy or grant changes. It applies in the migrator's single transaction like
 0048. Take the same logical dump first.
 
-If 0049 must be withdrawn, prefer a forward fix: withdrawal deletes the
-purchase records themselves. The paperwork stays (documents and their links
-are 0048's), and so do the files in the bucket. Run as the owner:
+Withdrawal is emergency recovery only, never routine cleanup, and a forward
+fix is preferred: withdrawal deletes the purchase records themselves. The
+paperwork stays (documents and their links are 0048's), and so do the files in
+the bucket. Run as the owner:
 
 ```sql
 BEGIN;
@@ -282,17 +284,9 @@ DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1790003300000;
 COMMIT;
 ```
 
-A purchase record cannot be removed in normal operation. If an operator must
-remove synthetic acceptance records, do it as the owner in one transaction,
-naming the synthetic container:
-
-```sql
-BEGIN;
-ALTER TABLE inventory_container_acquisitions DISABLE TRIGGER inventory_container_acquisitions_kept;
-DELETE FROM inventory_container_acquisitions WHERE container_id = '<synthetic container id>';
-ALTER TABLE inventory_container_acquisitions ENABLE TRIGGER inventory_container_acquisitions_kept;
-COMMIT;
-```
+A purchase record is never removed in normal operation, including after
+acceptance on the live database: retire the synthetic container the way other
+acceptance inventory is retired, and keep its purchase records as evidence.
 
 ## Status
 

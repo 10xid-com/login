@@ -269,7 +269,7 @@ describe("purchases of a container", () => {
     });
   });
 
-  test("a price is for this package, never without its currency, never negative; zero only as entered", async () => {
+  test("a price is a number for this package, never without its currency, never negative or NaN; zero only as entered", async () => {
     await inRollback(async () => {
       const { org, user } = await business();
       await asApp(org, user);
@@ -279,6 +279,9 @@ describe("purchases of a container", () => {
       await fails(...record(jar, { price: "9.99", currency: "cad" }), /inventory_container_acquisitions_currency/);
       await fails(...record(jar, { price: "9.99", currency: "CA" }), /inventory_container_acquisitions_currency/);
       await fails(...record(jar, { price: "-1.00", currency: "CAD" }), /inventory_container_acquisitions_price/);
+      // Not a number is not a price, though PostgreSQL sorts NaN above every number.
+      await fails(...record(jar, { price: "NaN", currency: "CAD" }), /inventory_container_acquisitions_price/);
+      await fails(...record(jar, { price: "Infinity", currency: "CAD" }), /numeric field overflow/);
       const gift = await acquire(jar, { price: "0", currency: "CAD", note: "A free sample" });
       expect([num(gift.price), gift.currency]).toEqual([0, "CAD"]);
     });
