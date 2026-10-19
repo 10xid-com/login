@@ -3317,6 +3317,70 @@ export const inventoryPurchaseIntents = pgTable(
   ],
 );
 
+/**
+ * How one container was acquired — seller, date, price and paperwork — as far
+ * as it is known (0049). Per container, never per lot: two jars of one lot can
+ * come from two sellers at two prices. Every fact is optional, but a first
+ * record says something. Records are full snapshots and never change: a
+ * correction is a new record that supersedes the one it corrects (one linear
+ * chain per container; the current record is the one nothing supersedes) and
+ * may clear a fact back to unknown. Never stock: this cites no movement.
+ * Append-only for the application role (SELECT and INSERT only).
+ */
+export const inventoryContainerAcquisitions = pgTable(
+  "inventory_container_acquisitions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    containerId: uuid("container_id").notNull(),
+    /** The record this one corrects; null for a container's first record. */
+    supersedesId: uuid("supersedes_id"),
+    /** The seller of THIS container — not assumed to be the product's maker. */
+    vendorId: uuid("vendor_id"),
+    orderLineId: uuid("order_line_id"),
+    /** The main paperwork; a stored document already linked to this container. */
+    documentId: uuid("document_id"),
+    acquiredOn: date("acquired_on"),
+    /** The price of this one package as recorded, never without its currency. */
+    price: money("price"),
+    currency: char("currency", { length: 3 }),
+    note: text("note"),
+    idempotencyKey: text("idempotency_key"),
+    recordedBy: uuid("recorded_by").references(() => users.id),
+    createdAt: stamp("created_at").notNull().default(sql`clock_timestamp()`),
+  },
+  (t) => [
+    unique("inventory_container_acquisitions_org_id").on(t.organizationId, t.id),
+    unique("inventory_container_acquisitions_once").on(t.organizationId, t.idempotencyKey),
+    unique("inventory_container_acquisitions_superseded_once").on(t.organizationId, t.supersedesId),
+    foreignKey({
+      name: "inventory_container_acquisitions_container",
+      columns: [t.organizationId, t.containerId],
+      foreignColumns: [inventoryContainers.organizationId, inventoryContainers.id],
+    }),
+    foreignKey({
+      name: "inventory_container_acquisitions_supersedes",
+      columns: [t.organizationId, t.supersedesId],
+      foreignColumns: [t.organizationId, t.id],
+    }),
+    foreignKey({
+      name: "inventory_container_acquisitions_vendor",
+      columns: [t.organizationId, t.vendorId],
+      foreignColumns: [inventoryBusinesses.organizationId, inventoryBusinesses.id],
+    }),
+    foreignKey({
+      name: "inventory_container_acquisitions_order_line",
+      columns: [t.organizationId, t.orderLineId],
+      foreignColumns: [inventoryOrderLines.organizationId, inventoryOrderLines.id],
+    }),
+    foreignKey({
+      name: "inventory_container_acquisitions_document",
+      columns: [t.organizationId, t.documentId],
+      foreignColumns: [inventoryDocuments.organizationId, inventoryDocuments.id],
+    }),
+  ],
+);
+
 /* Views (0048). Read-only, and each runs with the caller's rights, so the
    tenant policies of the tables beneath apply. Declared here for typed reads. */
 
