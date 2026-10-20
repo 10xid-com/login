@@ -10,6 +10,7 @@ import {
   normalizeEmail,
   openBindingForAuthUser,
   requestAuthBinding,
+  accountAddresses,
   userByAuthUserId,
 } from "@/lib/db/accounts";
 import { getAuth, loginOrigin } from "./auth";
@@ -180,7 +181,17 @@ export async function uidHomeForSession(): Promise<string | null> {
   const session = await getLoginSession();
   if (!session?.mfaVerifiedAt) return null;
   const account = await userByAuthUserId(session.user.id);
-  return account ? uidHomeFor(account.email) : null;
+  if (!account) return null;
+  for (const address of await accountAddresses(account.id)) {
+    const home = uidHomeFor(address);
+    if (home) return home;
+  }
+  return null;
+}
+
+/** Passed the authenticator within ten minutes: enough for adding a password or changing address. */
+export function mfaRecent(session: LoginIdentity, now = Date.now()): boolean {
+  return Boolean(session.mfaVerifiedAt) && now - session.mfaVerifiedAt!.getTime() < 10 * 60 * 1000;
 }
 
 /** `?next=` for a link, empty when it is just "/". */

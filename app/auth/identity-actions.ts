@@ -12,6 +12,7 @@ import { isSpentCode, rememberSpentCode } from "@/lib/auth/spent-code";
 import {
   assertLoginOrigin,
   getLoginSession,
+  mfaRecent,
   nextQuery,
   ownSignInSessions,
   resolveAccount,
@@ -27,6 +28,7 @@ import { authDb } from "@/lib/db/auth-connection";
 import { authUsers } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { afterSignIn, portalReturnPath } from "@/lib/auth/sso";
+import { cancelEmailChange, confirmEmailChange, requestEmailChange } from "@/lib/auth/email-change";
 
 /**
  * Every step of signing in on login.10xid.com, as server actions.
@@ -341,6 +343,51 @@ export async function setPasswordAction(form: FormData) {
       : ({ ok: false, code: "MFA_NOT_FRESH" } as const);
   if (!result.ok) to("/auth/account", { error: result.code === "MFA_NOT_FRESH" ? "fresh" : "current" });
   to("/auth/account", { notice: "password" });
+}
+
+/**
+ * Move the account to a new address, step one: a code to the new address.
+ * Needs the authenticator within ten minutes, or a code from it with this
+ * request, so an unattended browser cannot hand the account to another
+ * mailbox. The answer is the same whether or not the address is free.
+ */
+export async function requestEmailChangeAction(form: FormData) {
+  await assertLoginOrigin();
+  const session = await getLoginSession();
+  if (!session?.mfaVerifiedAt) to("/auth/sign-in", { next: "/auth/account" });
+  const address = email.safeParse(form.get("email"));
+  if (!address.success) to("/auth/account", { error: "email" });
+  if (address.data === session.user.email.toLowerCase()) to("/auth/account", { error: "same" });
+  if (!(await allow("changeEmail", session.user.id))) to("/auth/account", { error: "rate" });
+  if (!mfaRecent(session)) {
+    const code = totp.safeParse(form.get("code"));
+    if (!code.success) to("/auth/account", { error: "totp" });
+    const result = await call((h) => getAuth().api.mfaVerify({ body: { code: code.data }, headers: h }));
+    if (!result.ok) to("/auth/account", { error: result.code === "MFA_LOCKED" ? "locked" : "totp" });
+  }
+  await requestEmailChange(session.user.id, address.data);
+  to("/auth/account", { notice: "email-sent" });
+}
+
+/** Step two: the code from the new mailbox. Only then does the address change. */
+export async function confirmEmailChangeAction(form: FormData) {
+  await assertLoginOrigin();
+  const session = await getLoginSession();
+  if (!session?.mfaVerifiedAt) to("/auth/sign-in", { next: "/auth/account" });
+  const code = otp.safeParse(form.get("code"));
+  if (!code.success) to("/auth/account", { error: "email-code" });
+  if (!(await allow("useCode", session.user.id))) to("/auth/account", { error: "rate" });
+  const { outcome } = await confirmEmailChange(session.user.id, session.user.email, code.data);
+  console.info(`[email-change] ${session.user.id} → ${outcome}`);
+  if (outcome === "changed") to("/auth/account", { notice: "email-changed" });
+  to("/auth/account", { error: outcome === "code" ? "email-code" : `email-${outcome}` });
+}
+
+export async function cancelEmailChangeAction() {
+  await assertLoginOrigin();
+  const session = await getLoginSession();
+  if (session) await cancelEmailChange(session.user.id);
+  to("/auth/account", {});
 }
 
 /* ------------------------------------------------------------------ */

@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { redeemTicket, userById } from "@/lib/db/identity";
 import { hashTicket } from "@/lib/auth/sso";
-import { isUidSiteCaller, mayOpenUid } from "@/lib/auth/uid-sites";
+import { isUidSiteCaller, uidAddress } from "@/lib/auth/uid-sites";
+import { accountAddresses } from "@/lib/db/accounts";
 
 /**
  * A UiD page's server redeems the ticket its visitor brought back
@@ -27,11 +28,14 @@ export async function POST(request: NextRequest) {
 
   const redeemed = ticket.length >= 16 && ticket.length <= 128 ? await redeemTicket(hashTicket(ticket), host) : null;
   const user = redeemed ? await userById(redeemed.userId) : null;
-  if (!redeemed || !user || user.isService || !mayOpenUid(host, user.email)) {
+  // The address UID_SITES lists for this UiD, which may be a spare after a
+  // change of address: the UiD sends it back to /api/uid/alive.
+  const address = user && !user.isService ? uidAddress(host, await accountAddresses(user.id)) : null;
+  if (!redeemed || !address) {
     return NextResponse.json({ error: "That sign-in has expired. Sign in again." }, { status: 400, headers: NO_STORE });
   }
   return NextResponse.json(
-    { email: user.email.toLowerCase(), name: user.fullName ?? "", session: redeemed.sourceAuthSessionId },
+    { email: address, name: user!.fullName ?? "", session: redeemed.sourceAuthSessionId },
     { headers: NO_STORE },
   );
 }

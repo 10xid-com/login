@@ -2,7 +2,7 @@ import "server-only";
 import { and, eq, gt, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db, inAuthenticationTransaction } from "./connection";
 import { identityBindings, invitations, sessions, users } from "./schema";
-import { findUserByEmail } from "./identity";
+import { emailsForUser, findUserByEmail } from "./identity";
 
 /**
  * Sign-in identity (Better Auth) → portal account (users), as portal_app.
@@ -32,6 +32,17 @@ export async function userByAuthUserId(authUserId: string) {
     )
     .limit(1);
   return rows[0] ?? null;
+}
+
+/**
+ * Every address that reaches this account: the primary first, then verified
+ * spares. UID_SITES, UID_HOMES and OPERATOR_EMAILS name addresses, and a
+ * person who moves to a new address keeps the old one as a spare (0050), so
+ * those lists keep working until somebody updates them.
+ */
+export async function accountAddresses(userId: string): Promise<string[]> {
+  const rows = await emailsForUser(userId);
+  return rows.filter((r) => r.isPrimary || r.verifiedAt !== null).map((r) => normalizeEmail(r.email));
 }
 
 /** Whether any of these addresses belongs to a live account already bound to a sign-in. */
