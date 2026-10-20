@@ -78,6 +78,9 @@ export const GROUPS = [
 export type Group = (typeof GROUPS)[number];
 
 export const PAGES: PageRecord[] = [
+  { id: "wa.external-confirm", path: "/auth/wa/confirm", name: "Confirm Wrap Authority linking",
+    purpose: "Explicit consent and recent authenticator proof for the initiating account-link request.",
+    audience: "public", kind: "page", file: "app/auth/wa/confirm/page.tsx", group: "Machinery" },
   /* -------------------------------------------------------------- */
   /* Getting in                                                      */
   /* -------------------------------------------------------------- */
@@ -295,7 +298,7 @@ export const PAGES: PageRecord[] = [
     audience: "public",
     kind: "machinery",
     file: "app/auth/wa/authorize/route.ts",
-    methods: ["GET"],
+    methods: ["GET", "POST"],
     group: "Machinery",
   },
   {
