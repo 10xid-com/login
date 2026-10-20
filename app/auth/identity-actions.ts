@@ -80,13 +80,13 @@ export async function signInWithPasswordAction(form: FormData) {
   const next = safeNext(form.get("next"));
   const address = email.safeParse(form.get("email"));
   const secret = z.string().min(1).max(128).safeParse(form.get("password"));
-  if (!address.success || !secret.success) to("/auth/sign-in", { method: "password", error: "invalid", next });
-  if (!(await allow("password", address.data))) to("/auth/sign-in", { method: "password", error: "rate", next });
+  if (!address.success || !secret.success) to("/auth/sign-in", { error: "invalid", next });
+  if (!(await allow("password", address.data))) to("/auth/sign-in", { error: "rate", next });
 
   const result = await call((h) =>
     getAuth().api.signInEmail({ body: { email: address.data, password: secret.data }, headers: h }),
   );
-  if (!result.ok) to("/auth/sign-in", { method: "password", error: "invalid", next });
+  if (!result.ok) to("/auth/sign-in", { error: "invalid", next });
   to("/auth/mfa", { next });
 }
 
@@ -169,7 +169,7 @@ export async function resetPasswordAction(form: FormData) {
   // Better Auth has removed every sign-in session of this identity
   // (revokeSessionsOnPasswordReset); the portal sessions go too, at once.
   await endPortalAccessForAddress(address.data);
-  to("/auth/sign-in", { method: "password", notice: "reset", email: address.data });
+  to("/auth/sign-in", { notice: "reset", email: address.data });
 }
 
 export async function signInWithProviderAction(form: FormData) {
@@ -228,7 +228,7 @@ export async function confirmEnrollmentAction(form: FormData) {
   if (!result.ok) to("/auth/mfa/setup", { error: result.code === "MFA_INVALID_CODE" ? "code" : "expired", next });
   await settleAccount();
   await showRecoveryCodesOnce(result.value.recoveryCodes);
-  to("/auth/mfa/recovery-codes", { next });
+  to("/auth/mfa/recovery-codes", { next, first: "1" });
 }
 
 export async function verifyAuthenticatorAction(form: FormData) {
@@ -298,11 +298,44 @@ export async function regenerateRecoveryCodesAction() {
   to("/auth/mfa/recovery-codes", { next: "/auth/account" });
 }
 
-/** "I have saved them": forget the codes and carry on. */
+/**
+ * "I have saved them": forget the codes and carry on. Right after a first
+ * authenticator (signing up, or after an operator's reset), somebody with no
+ * password yet is offered one before going on.
+ */
 export async function recoveryCodesSavedAction(form: FormData) {
   await assertLoginOrigin();
   const next = safeNext(form.get("next"));
   await forgetRecoveryCodes();
+  if (form.get("first") === "1" && !(await hasPassword())) to("/auth/create-password", { next });
+  if (next !== "/") redirect(next);
+  await finish(next);
+}
+
+async function hasPassword(): Promise<boolean> {
+  const accounts = await call((h) => getAuth().api.listUserAccounts({ headers: h }));
+  return accounts.ok && accounts.value.some((a) => a.providerId === "credential");
+}
+
+/**
+ * Create a password as the last step of setting up: the mailbox is proven and
+ * the authenticator just passed, the same conditions as adding one from the
+ * account page. Skipping is fine; it can be added there later.
+ */
+export async function createPasswordAction(form: FormData) {
+  await assertLoginOrigin();
+  const next = safeNext(form.get("next"));
+  const session = await getLoginSession();
+  if (!session?.mfaVerifiedAt) to("/auth/sign-in", { next });
+  if (form.get("skip") !== "1") {
+    const chosen = password.safeParse(form.get("password"));
+    if (!chosen.success) to("/auth/create-password", { error: "password", next });
+    if (form.get("confirm") !== chosen.data) to("/auth/create-password", { error: "match", next });
+    if (!(await allow("setPassword", session.user.id))) to("/auth/create-password", { error: "rate", next });
+    if (!mfaRecent(session)) to("/auth/create-password", { error: "fresh", next });
+    const result = await call((h) => getAuth().api.setPassword({ body: { newPassword: chosen.data }, headers: h }));
+    if (!result.ok) to("/auth/create-password", { error: "failed", next });
+  }
   if (next !== "/") redirect(next);
   await finish(next);
 }

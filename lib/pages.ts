@@ -225,6 +225,16 @@ export const PAGES: PageRecord[] = [
   /* Your account                                                    */
   /* -------------------------------------------------------------- */
   {
+    id: "login.create-password",
+    path: "/auth/create-password",
+    name: "Create your password",
+    purpose: "The last step of setting up a sign-in, after the recovery codes: a password (twice), or skip for now.",
+    audience: "member",
+    kind: "page",
+    file: "app/auth/create-password/page.tsx",
+    group: "Your account",
+  },
+  {
     id: "login.sign-out",
     path: "/auth/sign-out",
     name: "Sign out",
