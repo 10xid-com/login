@@ -20,10 +20,6 @@ export async function GET(request: NextRequest) {
   const session = await getLoginSession();
   if (!session) return sendTo("/auth/sign-in");
   if (!session.mfaVerifiedAt) return sendTo("/auth/mfa");
-  // Linking accounts is sensitive: require a recent authenticator check.
-  if (Date.now() - session.mfaVerifiedAt.getTime() > 5 * 60 * 1000) {
-    return sendTo("/auth/mfa/again");
-  }
   const account = await userByAuthUserId(session.user.id);
   if (!account) return sendTo("/auth/access");
   const code = makeOpaqueCode();
