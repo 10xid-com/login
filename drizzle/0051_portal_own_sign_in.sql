@@ -1,4 +1,4 @@
--- 0050: the portal (app.10xid.com) signs people in itself; everybody sets up
+-- 0051: the portal (app.10xid.com) signs people in itself; everybody sets up
 -- a fresh authenticator there.
 --
 -- WHY. Paolo's decision of 2026-10-20: app.10xid.com is no longer tied to

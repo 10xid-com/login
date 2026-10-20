@@ -4,11 +4,13 @@ import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { APIError } from "better-auth/api";
 import { z } from "zod";
-import { getAuth } from "@/lib/auth/auth";
+import { getAuth, loginOrigin } from "@/lib/auth/auth";
+import { sendInvitation } from "@/lib/auth/mailer";
 import { assertLoginOrigin } from "@/lib/auth/login";
 import { allow } from "@/lib/auth/throttle";
 import {
   INVITE_ROLES,
+  clientBusinesses,
   decideBinding,
   endAccess,
   getOperator,
@@ -82,6 +84,18 @@ export async function inviteAction(form: FormData) {
     back({ error: "invite" });
   }
   logOperator(op, "invite", `${address.data} → ${business.data} as ${role.data}`, "invited");
+  const name = (await clientBusinesses()).find((b) => b.id === business.data)?.name ?? "your business";
+  try {
+    await sendInvitation({
+      to: address.data,
+      organizationName: name,
+      invitedByEmail: op.email,
+      signUpUrl: `${loginOrigin()}/auth/sign-up`,
+    });
+  } catch (error) {
+    console.error("[operator] invitation mail not sent:", error instanceof Error ? error.message : "unknown");
+    back({ notice: "invited-unsent", who: address.data });
+  }
   back({ notice: "invited", who: address.data });
 }
 

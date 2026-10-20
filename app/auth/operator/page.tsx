@@ -9,6 +9,7 @@ import {
   openBindings,
 } from "@/lib/auth/operator";
 import { decideBindingAction, endAccessAction, inviteAction } from "./actions";
+import { uidHomeForSession } from "@/lib/auth/login";
 import { FieldError, inputClass, labelClass } from "../auth-card";
 import { Notice, SecondaryButton, TextLink } from "../flow-ui";
 
@@ -17,7 +18,9 @@ export const metadata: Metadata = { title: "Operator" };
 const NOTICES: Record<string, (who?: string) => string> = {
   confirmed: () => "Confirmed. That sign-in now opens the account.",
   rejected: () => "Rejected. The sign-in stays unbound.",
-  invited: (who) => `Invited ${who}. They can create their sign-in with that address for seven days.`,
+  invited: (who) => `Invited ${who}, and emailed them how to sign up. The invitation lasts seven days.`,
+  "invited-unsent": (who) =>
+    `Invited ${who}, but the email did not go out. Tell them to sign up at login.10xid.com/auth/sign-up with that address within seven days.`,
   reset: (who) => `Authenticator removed and every session ended for ${who}. They set up a new one at their next sign-in.`,
   "signed-out": (who) => `Every session ended for ${who}.`,
 };
@@ -63,7 +66,11 @@ export default async function OperatorPage({
   if (!op) notFound();
   const params = await searchParams;
   const first = op.bootstrapRequestId;
-  const [allRequests, businesses] = await Promise.all([openBindings(), first ? [] : clientBusinesses()]);
+  const [allRequests, businesses, uidHome] = await Promise.all([
+    openBindings(),
+    first ? [] : clientBusinesses(),
+    uidHomeForSession(),
+  ]);
   // The first operator sees their own request and nothing else (lib/auth/operator.ts).
   const requests = first ? allRequests.filter((r) => r.id === first) : allRequests;
   const needsCode = !isFresh(op);
@@ -84,7 +91,10 @@ export default async function OperatorPage({
                 : "Authenticator confirmed in the last five minutes."}
             </p>
           </div>
-          <TextLink href="/auth/account">Your sign-in</TextLink>
+          <span className="text-sm">
+            {uidHome ? <><TextLink href={uidHome}>Back to your UiD</TextLink> · </> : null}
+            <TextLink href="/auth/account">Account settings</TextLink>
+          </span>
         </header>
 
         {first ? (
@@ -167,8 +177,8 @@ export default async function OperatorPage({
             </div>
           </form>
           <p className="mt-2 text-xs text-ink-faint">
-            Lasts seven days. What they can do depends on the role. No email is sent
-            from here: tell them to create their sign-in at login.10xid.com/auth/sign-up with this exact address.
+            Lasts seven days. What they can do depends on the role. They get an email telling them to
+            sign up at login.10xid.com/auth/sign-up with this exact address.
           </p>
         </section>
 

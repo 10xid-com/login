@@ -4,8 +4,9 @@ import { PRIMARY_HOST, originFor } from "./sso";
 
 /**
  * Delivery of one-time codes: signing in, verifying an address, resetting a
- * password. Better Auth's email-OTP plugin generates and checks them (stored
- * encrypted); this only carries them.
+ * password, moving to a new address. Better Auth's email-OTP plugin generates
+ * and checks most of them (stored encrypted), lib/auth/email-change the last;
+ * this only carries them.
  *
  * In production this goes through Resend. With no API key configured — local
  * development and tests — the code is written to the server log and to a file,
@@ -21,18 +22,20 @@ import { PRIMARY_HOST, originFor } from "./sso";
 const DEV_CODE_SINK =
   process.env.DEV_CODE_SINK ?? "/tmp/portal-signin-codes.log";
 
-export type CodePurpose = "sign-in" | "email-verification" | "forget-password";
+export type CodePurpose = "sign-in" | "email-verification" | "forget-password" | "email-change";
 
 const SUBJECT: Record<CodePurpose, (code: string) => string> = {
   "sign-in": (code) => `${code} is your 10XiD sign-in code`,
   "email-verification": (code) => `${code} is your 10XiD verification code`,
   "forget-password": (code) => `${code} is your 10XiD password reset code`,
+  "email-change": (code) => `${code} is your code to move 10XiD to this address`,
 };
 
 const OPENING: Record<CodePurpose, string> = {
   "sign-in": "Your sign-in code is",
   "email-verification": "Your code to verify this address is",
   "forget-password": "Your code to reset your password is",
+  "email-change": "Your code to make this your 10XiD sign-in address is",
 };
 
 /** Where the code is typed in. A sign-in code and a reset code have different pages. */
@@ -40,6 +43,7 @@ const ENTRY_PATH: Record<CodePurpose, string> = {
   "sign-in": "/auth/sign-in/code",
   "email-verification": "/auth/sign-in/code",
   "forget-password": "/auth/reset-password",
+  "email-change": "/auth/account",
 };
 
 /**
@@ -203,6 +207,40 @@ export async function sendInvitation(input: {
     from: process.env.MAIL_FROM ?? "10XiD <no-reply@10xid.com>",
     to: input.to,
     subject: `You have been invited to the 10XiD portal`,
+    text: body,
+  });
+}
+
+/**
+ * Tell the old address that the account moved off it. Carries nothing usable:
+ * it is there so a change the owner did not make is noticed.
+ */
+export async function sendAddressChanged(input: { to: string; newEmail: string }): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const body = [
+    `Your 10XiD sign-in address was changed from ${input.to} to ${input.newEmail}.`,
+    ``,
+    `From now on, sign in with ${input.newEmail}. Your password and authenticator`,
+    `stay as they were.`,
+    ``,
+    `If you did not do this, tell your 10XiD contact now.`,
+  ].join("\n");
+
+  if (!apiKey) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("RESEND_API_KEY is not set, so the address-change notice cannot be delivered.");
+    }
+    await appendFile(DEV_CODE_SINK, `${new Date().toISOString()}\t${input.to}\tMOVED\t${input.newEmail}\n`, "utf8");
+    console.log(`[dev] address change notice for ${input.to} → ${input.newEmail}`);
+    return;
+  }
+
+  const { Resend } = await import("resend");
+  const resend = new Resend(apiKey);
+  await resend.emails.send({
+    from: process.env.MAIL_FROM ?? "10XiD <no-reply@10xid.com>",
+    to: input.to,
+    subject: `Your 10XiD sign-in address was changed`,
     text: body,
   });
 }

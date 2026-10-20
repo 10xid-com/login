@@ -25,6 +25,7 @@ export const LIMITS = {
   requestReset: { ip: { window: 600, max: 10 }, subject: { window: 600, max: 3 } },
   reset: { ip: { window: 600, max: 20 }, subject: { window: 600, max: 10 } },
   setPassword: { ip: { window: 600, max: 20 }, subject: { window: 600, max: 5 } },
+  changeEmail: { ip: { window: 600, max: 10 }, subject: { window: 3600, max: 5 } },
   provider: { ip: { window: 600, max: 30 }, subject: { window: 600, max: 30 } },
 } satisfies Record<string, { ip: Rule; subject: Rule }>;
 

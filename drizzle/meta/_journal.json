@@ -356,7 +356,14 @@
       "idx": 50,
       "version": "7",
       "when": 1790003400000,
-      "tag": "0050_portal_own_sign_in",
+      "tag": "0050_change_own_email",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1790003500000,
+      "tag": "0051_portal_own_sign_in",
       "breakpoints": true
     }
   ]

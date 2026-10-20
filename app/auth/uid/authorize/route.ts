@@ -1,11 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { mintTicket } from "@/lib/db/identity";
-import { userByAuthUserId } from "@/lib/db/accounts";
+import { accountAddresses, userByAuthUserId } from "@/lib/db/accounts";
 import { getLoginSession } from "@/lib/auth/login";
 import { secretToken } from "@/lib/ids";
 import { SSO_TICKET_TTL_SECONDS } from "@/lib/auth/policy";
 import { hashTicket, isPrimaryHost, originFor } from "@/lib/auth/sso";
-import { mayOpenUid, uidSiteSecret, uidSites } from "@/lib/auth/uid-sites";
+import { uidAddress, uidSiteSecret, uidSites } from "@/lib/auth/uid-sites";
 
 /**
  * A UiD page's sign-in, on the login host: mint a ticket for that UiD
@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
 
   const account = await userByAuthUserId(session.user.id);
   if (!account) return here("/auth/access");
-  if (!mayOpenUid(uid, account.email)) {
+  if (!uidAddress(uid, await accountAddresses(account.id))) {
     // Never a dead end: a page that offers "Sign out and switch account" and
     // brings the person back here once they are signed in as the right address.
     const denied = here("/auth/uid/denied");

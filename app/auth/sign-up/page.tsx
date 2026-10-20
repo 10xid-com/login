@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: "Create your sign-in" };
  * For somebody who has been invited. The first sign-in is always a proof of
  * the mailbox — an emailed code, or Google / Microsoft vouching for the
  * address — so nobody can claim an invited address before its owner does.
- * A password can be added afterwards, from "Your sign-in". Creating a sign-in
+ * A password can be added afterwards, from "Account settings". Creating a sign-in
  * grants nothing by itself: the authenticator comes next, and the invitation
  * (made out to exactly this address) is accepted only then.
  */
