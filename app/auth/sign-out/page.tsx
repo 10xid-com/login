@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { getLoginSession, uidHomeForSession } from "@/lib/auth/login";
 import { signOutAction, signOutEverywhereAction } from "../identity-actions";
 import { AuthCard, SubmitButton } from "../auth-card";
@@ -14,6 +15,7 @@ export const metadata: Metadata = { title: "Sign out" };
  * sign somebody out by sending them here.
  */
 export default async function SignOutPage() {
+  await connection();
   const session = await getLoginSession();
   if (!session) redirect("/auth/sign-in?notice=signed-out");
   const uidHome = await uidHomeForSession();
