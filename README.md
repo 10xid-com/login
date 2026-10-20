@@ -1,15 +1,21 @@
 # 10XiD Login
 
 Sign-in for 10XiD, at **`login.10xid.com`**, and the owner of the database schema and its
-migrations. The portal itself — dashboard, jobs, the staff workspace, team and account
-screens — is [`10xid-com/app`](https://github.com/10xid-com/app), at **`app.10xid.com`** and on
-the client domains.
+migrations. The portal — dashboard, jobs, the staff workspace, team and account screens — is
+[`10xid-com/app`](https://github.com/10xid-com/app), at **`app.10xid.com`**.
+
+**The portal signs people in itself** (an emailed code, then an authenticator app, every time;
+see that repository's README). It is not tied to this host: nothing here sends anyone to it, and
+this host mints it no tickets. To keep it that way, `PORTAL_HOST` is left unset on this service
+and `app.10xid.com` is listed in `PORTAL_RETIRED_DOMAINS`, which takes its row out of
+`organization_domains` on deploy (see "The portal is untied" below).
 
 This app shows only `/auth/*` (plus `/api/auth/*` and `/healthz`): sign-in, creating a
 sign-in for an invitation, emailed codes, the authenticator and recovery codes, the account's
-sessions, and `/auth/sso/authorize`, where the cross-domain handoff mints its ticket. Any other address is sent to the portal (`PORTAL_HOST`), and
-signing in ends there. A portal host or client domain with no session sends the browser
-here and gets it back signed in, with no second prompt.
+sessions, the UiD sign-in (`/auth/uid/*`), and `/auth/sso/authorize`, where the cross-domain
+handoff mints its ticket for a registered domain. Signing in ends at the person's UiD
+(`UID_HOMES`) or, for everybody else, on this host's own account page — or at the portal again,
+only if `PORTAL_HOST` is ever set.
 
 Both apps use **one database**. Its schema (`lib/db/schema.ts`) and migrations
 (`drizzle/`) live here; `10xid-com/app` carries an identical copy of the schema file,
@@ -19,31 +25,30 @@ with its migration, and then copied there unchanged.
 | Service | Repository | Custom domain |
 |---|---|---|
 | `portal` — the login host | `10xid-com/login` | `login.10xid.com` |
-| the portal | `10xid-com/app` | `app.10xid.com` |
-| a client domain | `10xid-com/app` | `northstar.10xconnections.com` |
+| `app` — the portal, with its own sign-in | `10xid-com/app` | `app.10xid.com` |
+
+### The portal is untied
+
+Until 2026-10-20 the portal received its sessions from this host by the ticket handoff. It now
+signs people in itself, and refuses any session that was handed over. On the `portal` service:
+
+- `PORTAL_HOST` — **unset**. With it unset, nothing here redirects to the portal, and signing
+  in ends on `/auth/account` (or the person's UiD).
+- `PORTAL_RETIRED_DOMAINS` — includes `app.10xid.com`, so the deploy step deletes its
+  `organization_domains` row and no ticket can be minted for it. The step refuses to retire a
+  host that is still `PORTAL_HOST`, so unset that first.
 
 A custom domain on Railway needs two records in Cloudflare, not one: the CNAME that
 routes traffic, and a `_railway-verify.<name>` TXT record proving ownership. With only
 the CNAME, the certificate sits at "issuing" indefinitely and browsers refuse the address.
 
-The portal host is a handoff destination like a client domain, so it needs a row in
-`organization_domains` under the house company. The deploy step (`scripts/migrate.mjs`,
-Railway's pre-deploy command) registers `PORTAL_HOST` there whenever it is set. To do it by
-hand instead, as the owner connection:
-
-```sql
-insert into organization_domains (organization_id, hostname, is_primary, verified_at)
-select id, 'app.10xid.com', false, now() from organizations where type = 'internal';
-```
-
 ### Where signing in ends
 
-At the portal, unless the person has a UiD of their own. `UID_HOMES` on the login service lists
+At the person's UiD, if they have one; otherwise on this host's account page (`/auth/account`). `UID_HOMES` on the login service lists
 them: `address=https://…` pairs, comma-separated, the address being the portal account's
 (`paolo@10xid.com=https://uid-bypaolo.10xid.com/v3/,…`). Once that account's identity is past the
 authenticator, `/` on the login host (`app/page.tsx`) sends it to its UiD; a signed-in visit to
-login.10xid.com does the same. Anybody not listed goes to the portal as before, and a handoff to a
-client domain is unaffected. Only https addresses on a 10xid.com subdomain other than the login
+login.10xid.com does the same. Anybody not listed lands on `/auth/account`. Only https addresses on a 10xid.com subdomain other than the login
 host are accepted (`lib/auth/uid-home.ts`). Being sent there is a redirect; signing in on a UiD page is
 the next section.
 
@@ -67,7 +72,7 @@ difference: its server redeems the ticket here, server to server, rather than in
 `lib/auth/uid-sites.ts`), which that UiD's service holds as `UID_SITE_SECRET`. One key here
 serves every UiD, and no UiD can redeem another's tickets. Without the key, no UiD signs in.
 
-`app.10xid.com` and `login.10xid.com` are siblings, but the session cookie is `__Host-`
+`app.10xid.com` and `login.10xid.com` are siblings, but each one's session cookie is `__Host-`
 prefixed and so is never shared between them. That is deliberate — a cookie scoped to
 `.10xid.com` could be read or overwritten by any other subdomain.
 
@@ -76,9 +81,9 @@ prefixed and so is never shared between them. That is deliberate — a cookie sc
 Sign-in runs **here**, on Railway, with no authentication provider: [Better Auth](https://better-auth.com)
 (MIT) under `/api/auth`, behind this app's own branded pages under `/auth/*`. Password,
 emailed codes (through Resend), Google and Microsoft — and an authenticator app after **every**
-one of them. A signed-in, authenticator-verified identity that is bound to a portal account is
-handed to `app.10xid.com` by the existing single-use ticket handoff; being signed in grants
-nothing by itself.
+one of them. A signed-in, authenticator-verified identity that is bound to a portal account
+opens the person's UiD pages; being signed in grants nothing by itself. (It used to be handed
+to `app.10xid.com` too; the portal now signs people in itself — "The portal is untied" above.)
 
 Its tables (`auth_*`) belong to their own restricted role, `portal_auth` (`AUTH_DATABASE_URL`);
 the portal's role cannot read them. A sign-in lasts until the person signs out: there is no

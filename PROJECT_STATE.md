@@ -90,6 +90,13 @@ Paolo's direction (2026-10-07): the portal lives at `app.10xid.com` in its own p
 - **Verified live after the switch (no real sign-in):** login host sends signed-out visitors to its form and signed-in ones to `app.10xid.com` with the path kept; `/api/*` is not redirected; `app.10xid.com` and northstar start the handoff, which reaches the login host; the portal forwards sign-in screens to the login host; a forged ticket is refused. **A real sign-in end to end was verified by Paolo on 2026-10-07** (signed out, signed in again at `login.10xid.com`, landed on `app.10xid.com` with no second prompt).
 - `PORTAL_CLIENT_DOMAINS` on `portal` was reduced to `northstar=northstar.10xconnections.com` (it also re-registered the dead `portal-northstar-production.up.railway.app`). The registration steps only add rows, so the deploy step gained `PORTAL_RETIRED_DOMAINS`: exact hostnames whose rows it deletes, refusing any still configured as live. `portal` has `PORTAL_RETIRED_DOMAINS=portal-northstar-production.up.railway.app`; the deploy log line `Domain retired: …` (or `already retired`) confirms it.
 
+## Portal untied from login.10xid.com (built 2026-10-20, NOT deployed)
+Paolo's direction (2026-10-20): `app.10xid.com` gets its own sign-in and is no longer tied to `login.10xid.com`. Branch `claude/festive-maxwell-4tr9pg` in both repositories; nothing merged, deployed, or changed on Railway or in the database.
+
+- **`10xid-com/app`:** signs people in itself — emailed code, then the authenticator app every time (or a recovery code), first sign-in sets the app up; invitations are accepted there. The `/auth/sso/*` handoff is removed and handed-over sessions are refused. Uses the existing `sign_in_codes`, `recovery_codes` and `users.totp_*` (no schema change). Needs `TOTP_ENC_KEY` on the `app` service. Cutover steps: that repository's README, "Cutover".
+- **Here:** `/` sends a signed-in person to their UiD, or — with `PORTAL_HOST` unset — to `/auth/account`, instead of the portal. At cutover: unset `PORTAL_HOST` on `portal`, add `app.10xid.com` to `PORTAL_RETIRED_DOMAINS`.
+- **Open:** in the window before each person's first portal sign-in, their inbox alone is enough to set up the authenticator and claim the account.
+
 ## WorkOS sign-in foundation (built 2026-10-07, NOT deployed)
 Built from the 10XiD Build Brief (agreed with the consultant 2026-10-07), Part 1 "Start now" only: the audit, then the WorkOS foundation. Branch `claude/great-ptolemy-sd6k4e` in both repositories; nothing merged, nothing deployed, no Railway, DNS or WorkOS change made.
 
