@@ -79,7 +79,9 @@ export default async function AccountPage({
   const notice =
     params.notice === "recovered"
       ? `You used a recovery code (${params.left ?? 0} left). If your authenticator is lost, replace it below now.`
-      : params.notice ? NOTICES[params.notice] : null;
+      : params.notice === "password"
+        ? `Password saved for ${session.user.email}. Any other sessions have been signed out.`
+        : params.notice ? NOTICES[params.notice] : null;
   const error = params.error ? ERRORS[params.error] : null;
 
   return (
@@ -173,14 +175,20 @@ export default async function AccountPage({
       </form>
 
       <h2 className="mt-6 text-sm font-semibold text-ink">Password</h2>
+      <p className="mt-1 text-sm text-ink-soft">
+        For signing in as <span className="font-medium text-ink">{session.user.email}</span>, on every UiD that
+        address opens. Another person&apos;s password is set by signing in as them.
+      </p>
       <form action={setPasswordAction} className="mt-2">
+        {/* Tells a password manager which address this password belongs to. */}
+        <input type="text" name="username" autoComplete="username" value={session.user.email} readOnly hidden />
         {hasPassword ? (
           <>
             <label htmlFor="current" className={labelClass}>Current password</label>
             <input id="current" name="current" type="password" autoComplete="current-password" required className={inputClass} />
           </>
         ) : (
-          <p className="text-sm text-ink-soft">No password yet. You can sign in with an emailed code, or add one here.</p>
+          <p className="text-sm text-ink-soft">No password yet. You sign in with an emailed code, or add one here.</p>
         )}
         <label htmlFor="password" className={`${labelClass} mt-3`}>{hasPassword ? "New password" : "Password"}</label>
         <input id="password" name="password" type="password" autoComplete="new-password" minLength={12} maxLength={128}
