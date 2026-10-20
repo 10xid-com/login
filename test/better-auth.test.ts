@@ -890,6 +890,30 @@ describe("UiD pages sign in through the login host", () => {
   });
 });
 
+describe("a password added on the account page signs in", () => {
+  const headersOf = (b: Browser) =>
+    new Headers({ origin: env.origin, "x-real-ip": b.ip, cookie: [...b.jar].map(([k, v]) => `${k}=${v}`).join("; ") });
+
+  test("added, then changed: each signs in, and only the latest", async () => {
+    const email = address("pw-add");
+    await inviteToOrganization({ organizationId: orgId, email, role: "member", invitedBy: inviterId });
+    const b = new Browser();
+    await signInWithCode(b, email);
+    await enroll(b);
+    await getAuth().api.setPassword({ body: { newPassword: "first password 123" }, headers: headersOf(b) });
+
+    const first = new Browser();
+    expect((await first.call("/sign-in/email", { email, password: "first password 123" })).status).toBe(200);
+
+    await getAuth().api.changePassword({
+      body: { currentPassword: "first password 123", newPassword: "second password 456", revokeOtherSessions: true },
+      headers: headersOf(b),
+    });
+    expect((await new Browser().call("/sign-in/email", { email, password: "first password 123" })).status).toBe(401);
+    expect((await new Browser().call("/sign-in/email", { email, password: "second password 456" })).status).toBe(200);
+  });
+});
+
 describe("changing your own address", () => {
   const UID = "uid-test.10xid.com";
   const KEY = "a-test-only-uid-site-key-0123456789abcdef";
