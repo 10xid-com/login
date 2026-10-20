@@ -26,6 +26,8 @@ For isolated staging, set these same three **exact**, distinct HTTPS origins on 
 - WA_STAGING_LOGIN_ORIGIN=https://staging-... (the login service)
 - WA_STAGING_PORTAL_ORIGIN=https://staging-... (the portal service)
 
+The portal introspection endpoint is /api/v1/wrapauthority/introspect, using the existing machine-API routing boundary; it still requires a valid scoped assertion and a live matching session. Set the services' existing PRIMARY_HOST / PORTAL_HOST to their exact staging hosts too, so native sign-in cookies and origin checks stay in staging.
+
 Hostnames must start with staging-, staging., stage-, preview- or test- (the corresponding dotted forms also work). No credentials, non-default ports, paths, queries, wildcards or request-derived origins are accepted. WA staging is pinned to the already approved Supabase branch ehejnxhznfnxoetnnhxg; it refuses the production database reference.
 
 Secrets and client IDs must be generated/configured through the approved secret manager, never committed:
@@ -58,7 +60,7 @@ Local verification uses Node 24:
 - WA: npm run test:step6 — 31 passing checks including the reconstructed partial staging schema, actual PostgreSQL role/RLS checks, linking/replay/revocation and route/storage doubles.
 - WA: recovery regression — 12 pass; tax regression — 9 pass.
 - Login: selected consent/MFA, client/callback, page inventory and SSO URL suites — 24 pass.
-- Portal: selected authorization, page inventory, assertion protocol and actual session-query suites — 227 pass.
+- Portal: selected authorization, page inventory, assertion protocol, routing and actual session-query suites — 239 pass.
 - TypeScript checks pass for both complete 10XiD source trees and all changed WA files.
 - ESLint passes for changed login and portal logic.
 
