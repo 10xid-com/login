@@ -225,6 +225,16 @@ export const PAGES: PageRecord[] = [
   /* Your account                                                    */
   /* -------------------------------------------------------------- */
   {
+    id: "login.sign-out",
+    path: "/auth/sign-out",
+    name: "Sign out",
+    purpose: "Where a UiD's Sign out lands: one button signs out here, which ends every UiD's session too; or on every device.",
+    audience: "member",
+    kind: "page",
+    file: "app/auth/sign-out/page.tsx",
+    group: "Your account",
+  },
+  {
     id: "login.account",
     path: "/auth/account",
     name: "Account settings",
