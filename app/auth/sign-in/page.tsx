@@ -42,7 +42,7 @@ export default async function SignInPage({
   const error = params.error ? (ERRORS[params.error] ?? ERRORS.provider) : null;
   const notice = params.notice ? NOTICES[params.notice] : null;
 
-  const withPassword = params.method === "password";
+  const withCode = params.method === "code";
   const footer = (
     <>
       Invited and new here? <TextLink href={`/auth/sign-up${nextQuery(next)}`}>Create your sign-in</TextLink>
@@ -56,9 +56,9 @@ export default async function SignInPage({
     </>
   );
 
-  // Code first: most sign-ins have no password, so a password box by default is
-  // a field people cannot fill. Password is one link away for those who set one.
-  if (!withPassword) {
+  // Password first: the people signing in here have set one. An emailed code
+  // is one link away for anybody who hasn't, or has forgotten it.
+  if (withCode) {
     return (
       <AuthCard
         title="Sign in"
@@ -73,7 +73,7 @@ export default async function SignInPage({
           <SubmitButton>Email me a code</SubmitButton>
         </form>
         <div className="mt-4 text-sm">
-          <TextLink href={`/auth/sign-in?method=password${params.email ? `&email=${encodeURIComponent(params.email)}` : ""}${nextQuery(next, "&")}`}>Use a password instead</TextLink>
+          <TextLink href={`/auth/sign-in${params.email ? `?email=${encodeURIComponent(params.email)}${nextQuery(next, "&")}` : nextQuery(next)}`}>Use a password instead</TextLink>
         </div>
         <ProviderButtons providers={configuredProviders()} next={next} />
       </AuthCard>
@@ -82,7 +82,7 @@ export default async function SignInPage({
 
   return (
     <AuthCard
-      title="Sign in with your password"
+      title="Sign in"
       intro="Your authenticator app is the second step."
       footer={footer}
     >
@@ -97,7 +97,7 @@ export default async function SignInPage({
         <SubmitButton>Continue</SubmitButton>
       </form>
       <div className="mt-4 flex justify-between text-sm">
-        <TextLink href={`/auth/sign-in${nextQuery(next)}`}>Email me a code instead</TextLink>
+        <TextLink href={`/auth/sign-in?method=code${nextQuery(next, "&")}`}>Email me a code instead</TextLink>
         <TextLink href="/auth/forgot-password">Forgot password?</TextLink>
       </div>
       <ProviderButtons providers={configuredProviders()} next={next} />

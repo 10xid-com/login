@@ -12,7 +12,7 @@ export const metadata: Metadata = { title: "Your recovery codes" };
 export default async function RecoveryCodesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string }>;
+  searchParams: Promise<{ next?: string; first?: string }>;
 }) {
   const params = await searchParams;
   const next = safeNext(params.next);
@@ -31,6 +31,7 @@ export default async function RecoveryCodesPage({
       </ul>
       <form action={recoveryCodesSavedAction}>
         <Hidden name="next" value={next} />
+        {params.first === "1" ? <Hidden name="first" value="1" /> : null}
         <SubmitButton>I have saved them — continue</SubmitButton>
       </form>
     </AuthCard>

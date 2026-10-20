@@ -3,6 +3,14 @@ import { readFile } from "node:fs/promises";
 import { Client } from "pg";
 import { openAccountMenu, seededIds, totpCode } from "./helpers";
 
+/** "I have saved them", then past the create-password step a first authenticator offers. */
+async function savedThem(p: Page) {
+  await p.getByRole("button", { name: /saved them/ }).click();
+  await p.waitForURL((u) => !u.pathname.includes("/auth/mfa/recovery-codes"));
+  if (new URL(p.url()).pathname === "/auth/create-password") await p.getByRole("button", { name: "Skip for now" }).click();
+}
+
+
 /**
  * Self-hosted sign-in, end to end, in a real browser, across the two real
  * hosts: login.portal-a.test (this app, Better Auth) and app.portal-a.test
@@ -125,7 +133,7 @@ async function signInAsOperator(page: Page) {
   await page.getByLabel("Code").fill(await codeFor(OPERATOR, "sign-in"));
   await page.getByRole("button", { name: "Continue" }).click();
   operatorSecretValue = (await enrolFromPage(page)).secret;
-  await page.getByRole("button", { name: /saved them/ }).click();
+  await savedThem(page);
 }
 
 async function cookieNames(context: BrowserContext, origin: string) {
@@ -164,7 +172,7 @@ test("invited: emailed code → authenticator required → portal; then a passwo
 
   // Signed in — and stopped at the authenticator.
   const { secret } = await enrolFromPage(page);
-  await page.getByRole("button", { name: /saved them/ }).click();
+  await savedThem(page);
 
   // The invitation is accepted, the ticket minted and spent: on the portal.
   await expect(page).toHaveURL(`${APP}/dashboard`);
@@ -213,7 +221,6 @@ test("invited: emailed code → authenticator required → portal; then a passwo
 
   // Password sign-in: still the authenticator before the portal.
   await page.goto(`${APP}/dashboard`);
-  await page.getByRole("link", { name: "Use a password instead" }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
@@ -232,7 +239,7 @@ test("emailed code: still the authenticator, and a used code is not accepted twi
   await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
   await page.getByRole("button", { name: "Continue" }).click();
   const { secret, used } = await enrolFromPage(page);
-  await page.getByRole("button", { name: /saved them/ }).click();
+  await savedThem(page);
 
   // Sign out, sign in again with a code: the same 30-second authenticator
   // code that just confirmed enrolment is refused.
@@ -277,12 +284,13 @@ test("an existing account is not merged by address: it waits for an operator", a
   await sql("insert into memberships (user_id, organization_id, role) values ($1, $2, 'owner')", [user!.id, orgId]);
 
   await page.goto(`${APP}/dashboard`);
+  await page.getByRole("link", { name: "Email me a code instead" }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: "Email me a code" }).click();
   await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
   await page.getByRole("button", { name: "Continue" }).click();
   await enrolFromPage(page);
-  await page.getByRole("button", { name: /saved them/ }).click();
+  await savedThem(page);
 
   // Signed in, past the authenticator — and no access.
   await expect(page).toHaveURL(/\/auth\/access/);
@@ -350,12 +358,13 @@ test("a ticket works once: replaying the callback fails", async ({ page, context
     if (r.url().includes("/auth/sso/callback")) callback = r.url();
   });
   await page.goto(`${APP}/dashboard`);
+  await page.getByRole("link", { name: "Email me a code instead" }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: "Email me a code" }).click();
   await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
   await page.getByRole("button", { name: "Continue" }).click();
   await enrolFromPage(page);
-  await page.getByRole("button", { name: /saved them/ }).click();
+  await savedThem(page);
   await expect(page).toHaveURL(`${APP}/dashboard`);
   expect(callback).toContain("ticket=");
 
@@ -427,7 +436,7 @@ test("signed in longer than ten minutes: the account page lists devices, and sig
   await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
   await page.getByRole("button", { name: "Continue" }).click();
   const { secret } = await enrolFromPage(page);
-  await page.getByRole("button", { name: /saved them/ }).click();
+  await savedThem(page);
 
   const other = await browser.newContext();
   const second = await other.newPage();
@@ -482,7 +491,7 @@ test("confirm it is you: a fresh code refreshes the sign-in, then back to the po
   await page.getByLabel("Code").fill(await codeFor(email, "sign-in"));
   await page.getByRole("button", { name: "Continue" }).click();
   const { secret } = await enrolFromPage(page);
-  await page.getByRole("button", { name: /saved them/ }).click();
+  await savedThem(page);
 
   const verifiedAt = async () =>
     (
@@ -571,6 +580,7 @@ test("asking again sends the same code, which works on another device; the email
 
   // Start from a portal deep link, so sign-in is resuming a handoff.
   await page.goto(`${APP}/jobs`);
+  await page.getByRole("link", { name: "Email me a code instead" }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: "Email me a code" }).click();
   const first = await codeFor(email, "sign-in");
@@ -593,7 +603,7 @@ test("asking again sends the same code, which works on another device; the email
   await tab.getByLabel("Code").fill(first);
   await tab.getByRole("button", { name: "Continue" }).click();
   await enrolFromPage(tab);
-  await tab.getByRole("button", { name: /saved them/ }).click();
+  await savedThem(tab);
   // Back on exactly the page the visit started from.
   await expect(tab).toHaveURL(`${APP}/jobs`);
 });

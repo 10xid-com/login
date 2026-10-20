@@ -25,7 +25,7 @@ export default async function SignUpPage({
   const error = params.error === "email" ? "That does not look like an email address." : null;
   return (
     <AuthCard title="Create your sign-in"
-      intro="Use the address your invitation was sent to. We will email you a code to prove it is yours; you can add a password afterwards."
+      intro="Use the address your invitation was sent to. We will email you a code to prove it is yours, then you set up your authenticator app and create your password."
       footer={<>Already set up? <TextLink href={`/auth/sign-in${nextQuery(next)}`}>Sign in</TextLink></>}>
       <form action={requestSignInCodeAction}>
         <Hidden name="next" value={next} />

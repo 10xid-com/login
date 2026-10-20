@@ -3,6 +3,14 @@ import { readFile } from "node:fs/promises";
 import { Client } from "pg";
 import { totpCode } from "./helpers";
 
+/** "I have saved them", then past the create-password step a first authenticator offers. */
+async function savedThem(p: Page) {
+  await p.getByRole("button", { name: /saved them/ }).click();
+  await p.waitForURL((u) => !u.pathname.includes("/auth/mfa/recovery-codes"));
+  if (new URL(p.url()).pathname === "/auth/create-password") await p.getByRole("button", { name: "Skip for now" }).click();
+}
+
+
 /**
  * Agency access, end to end, in a real browser across both hosts: an agency
  * asks a business for access and names a person; the business's owner approves
@@ -91,7 +99,7 @@ async function person(browser: Browser, label: string, org: string, role: string
   const secret = (await page.locator("p.font-mono").innerText()).replace(/\s+/g, "");
   await page.getByLabel("Code").fill(await freshCode(secret));
   await page.getByRole("button", { name: "Confirm" }).click();
-  await page.getByRole("button", { name: /saved them/ }).click();
+  await savedThem(page);
   await expect(page).toHaveURL(`${APP}/dashboard`);
   return { email, page, secret };
 }
