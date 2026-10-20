@@ -250,6 +250,13 @@ export const users = pgTable("users", {
    */
   totpSecret: text("totp_secret"),
   totpConfirmedAt: timestamp("totp_confirmed_at", { withTimezone: true }),
+  /**
+   * The portal's own password (0053), as scrypt `salt.hash`, or null for none.
+   * Set by the person on app.10xid.com after the authenticator; it replaces
+   * the emailed code as the first step of a portal sign-in, never the
+   * authenticator. Unrelated to any password on the login host.
+   */
+  passwordHash: text("password_hash"),
   createdAt,
   updatedAt,
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
