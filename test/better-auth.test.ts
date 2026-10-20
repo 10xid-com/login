@@ -26,6 +26,9 @@ vi.mock("@/lib/auth/mailer", () => ({
   sendAuthCode: async (m: { to: string; code: string; purpose: string }) => {
     mailbox.push({ to: m.to, code: m.code, purpose: m.purpose });
   },
+  sendAddressChanged: async (m: { to: string; newEmail: string }) => {
+    mailbox.push({ to: m.to, code: m.newEmail, purpose: "address-changed" });
+  },
 }));
 
 const { getAuth } = await import("@/lib/auth/auth");
@@ -34,7 +37,8 @@ const { closeAuthPool, assertAuthRole } = await import("@/lib/db/auth-connection
 const { closePool } = await import("@/lib/db/connection");
 const { inviteToOrganization } = await import("@/lib/db/invitations");
 const { mintTicket, redeemTicket, consumeTicketsForAuthSession } = await import("@/lib/db/identity");
-const { userByAuthUserId } = await import("@/lib/db/accounts");
+const { accountAddresses, userByAuthUserId } = await import("@/lib/db/accounts");
+const { confirmEmailChange, requestEmailChange } = await import("@/lib/auth/email-change");
 const { hashTicket } = await import("@/lib/auth/sso");
 const { uidSiteSecret } = await import("@/lib/auth/uid-sites");
 const { POST: uidRedeem } = await import("@/app/api/uid/redeem/route");
@@ -880,9 +884,89 @@ describe("UiD pages sign in through the login host", () => {
     const src = readFileSync("app/auth/uid/authorize/route.ts", "utf8");
     expect(src).toContain("userByAuthUserId(session.user.id)");
     expect(src).toContain("if (!session.mfaVerifiedAt)");
-    expect(src).toContain("if (!mayOpenUid(uid, account.email))");
+    expect(src).toContain("if (!uidAddress(uid, await accountAddresses(account.id)))");
     expect(src).toContain("userId: account.id");
     expect(src).toContain("audienceHost: uid");
+  });
+});
+
+describe("changing your own address", () => {
+  const UID = "uid-test.10xid.com";
+  const KEY = "a-test-only-uid-site-key-0123456789abcdef";
+
+  async function bound(label: string) {
+    const { b, email } = await invitedAndSignedIn(label);
+    await enroll(b);
+    const id = (await authUserId(email))!;
+    await resolveAccount({ id, email, emailVerified: true, name: "x" });
+    return { b, email, id, account: (await userByAuthUserId(id))! };
+  }
+  const codeFor = (to: string) => mailbox.filter((m) => m.to === to && m.purpose === "email-change").at(-1)!.code;
+
+  test("a code to the new address moves the account and its sign-in; the old address stays as a spare", async () => {
+    const { email, id, account, b } = await bound("move-from");
+    const next = address("move-to");
+    await requestEmailChange(id, next);
+    const code = codeFor(next);
+
+    const wrong = code === "000000" ? "111111" : "000000";
+    expect((await confirmEmailChange(id, email, wrong)).outcome).toBe("code");
+    expect((await confirmEmailChange(id, email, code)).outcome).toBe("changed");
+    expect(mailbox.at(-1)).toEqual({ to: email, code: next, purpose: "address-changed" });
+
+    expect((await owner.query("select email from auth_users where id = $1", [id])).rows[0].email).toBe(next);
+    expect((await owner.query("select email from users where id = $1", [account.id])).rows[0].email).toBe(next);
+    expect(await accountAddresses(account.id)).toEqual([next, email]);
+    // Same identity, same authenticator, same session: nothing set up is lost.
+    expect((await b.session())?.user.email).toBe(next);
+    expect((await authenticatorState(id)).state).toBe("enrolled");
+    // A code spent once is gone.
+    expect((await confirmEmailChange(id, next, code)).outcome).toBe("expired");
+  });
+
+  test("a UiD listed under the old address still opens, and is told the listed address", async () => {
+    vi.stubEnv("UID_SITE_KEY", KEY);
+    const { email, id, account, b } = await bound("move-uid");
+    vi.stubEnv("UID_SITES", `${UID}=${email}`);
+    const next = address("move-uid-new");
+    await requestEmailChange(id, next);
+    expect((await confirmEmailChange(id, email, codeFor(next))).outcome).toBe("changed");
+
+    const token = "uid-ticket-moved-0123456789";
+    await mintTicket({
+      ticketHash: hashTicket(token),
+      userId: account.id,
+      audienceHost: UID,
+      returnPath: "/",
+      sourceAuthSessionId: (await b.session())!.session.id as string,
+      expiresAt: new Date(Date.now() + 30_000),
+    });
+    const r = await uidRedeem(new NextRequest(`${env.origin}/api/uid/redeem`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${uidSiteSecret(UID, KEY)}` },
+      body: JSON.stringify({ host: UID, ticket: token }),
+    }));
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { email: string }).email).toBe(email);
+  });
+
+  test("an address another account holds is refused, and only after the code, so asking reveals nothing", async () => {
+    const { email, id } = await bound("move-taken");
+    const other = await bound("move-holder");
+    await requestEmailChange(id, other.email);
+    expect((await confirmEmailChange(id, email, codeFor(other.email))).outcome).toBe("taken");
+    expect((await owner.query("select email from auth_users where id = $1", [id])).rows[0].email).toBe(email);
+  });
+
+  test("five wrong codes end the request", async () => {
+    const { email, id } = await bound("move-tries");
+    const next = address("move-tries-new");
+    await requestEmailChange(id, next);
+    const code = codeFor(next);
+    const wrong = code === "000000" ? "111111" : "000000";
+    for (let i = 0; i < 4; i++) expect((await confirmEmailChange(id, email, wrong)).outcome).toBe("code");
+    expect((await confirmEmailChange(id, email, wrong)).outcome).toBe("expired");
+    expect((await confirmEmailChange(id, email, code)).outcome).toBe("expired");
   });
 });
 

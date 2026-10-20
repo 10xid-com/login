@@ -458,7 +458,7 @@ test("signed in longer than ten minutes: the account page lists devices, and sig
   }
 
   await page.goto(`${LOGIN}/auth/account`);
-  await expect(page.getByRole("heading", { name: "Your sign-in" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Account settings" })).toBeVisible();
   await expect(page.getByRole("listitem").filter({ hasText: "Since" })).toHaveCount(2);
 
   // Sign out the other device.

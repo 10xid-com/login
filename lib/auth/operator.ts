@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { authDb } from "@/lib/db/auth-connection";
 import { authSessions, authTwoFactors, authUsers } from "@/lib/db/schema";
 import {
+  accountAddresses,
   boundAccountAmong,
   normalizeEmail,
   openBindingForAuthUser,
@@ -68,7 +69,7 @@ export async function getOperator(): Promise<Operator | null> {
   const account = await userByAuthUserId(session.user.id);
   if (account) {
     const email = normalizeEmail(account.email);
-    if (!listed.has(email)) return null;
+    if (!(await accountAddresses(account.id)).some((a) => listed.has(a))) return null;
     return { session, accountId: account.id, email, name: account.fullName || email, bootstrapRequestId: null };
   }
 

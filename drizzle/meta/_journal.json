@@ -351,6 +351,13 @@
       "when": 1790003300000,
       "tag": "0049_container_acquisitions",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1790003400000,
+      "tag": "0050_change_own_email",
+      "breakpoints": true
     }
   ]
 }

@@ -227,8 +227,8 @@ export const PAGES: PageRecord[] = [
   {
     id: "login.account",
     path: "/auth/account",
-    name: "Your sign-in",
-    purpose: "Sessions, signing out everywhere, authenticator, recovery codes, linked providers.",
+    name: "Account settings",
+    purpose: "Address, password, sessions, signing out everywhere, authenticator, recovery codes, linked providers; operator tools for operators. Each UiD's Account button opens it.",
     audience: "member",
     kind: "page",
     file: "app/auth/account/page.tsx",

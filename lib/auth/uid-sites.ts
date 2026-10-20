@@ -63,6 +63,11 @@ export function mayOpenUid(host: string, email: string): boolean {
   return uidSites().get(host.toLowerCase())?.has(email.trim().toLowerCase()) ?? false;
 }
 
+/** The first of an account's addresses (lib/db/accounts: accountAddresses) that may open that UiD. */
+export function uidAddress(host: string, emails: readonly string[]): string | null {
+  return emails.find((e) => mayOpenUid(host, e)) ?? null;
+}
+
 /**
  * One UiD's secret: what its server sends to redeem a ticket or ask whether a
  * sign-in is still live. Null when there is no usable key, which switches
