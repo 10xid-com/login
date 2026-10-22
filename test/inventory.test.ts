@@ -235,6 +235,22 @@ describe("A12 migration", () => {
     ]);
     for (const v of views) expect(v.reloptions).toContain("security_invoker=true");
   });
+
+  test("0054's plain tables to read by run with the caller's rights and grant nothing", async () => {
+    const views = await q(
+      `select c.relname, c.reloptions,
+              has_table_privilege('portal_app', c.oid, 'select') as app_reads
+         from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public' and c.relkind = 'v' and c.relname like 'my\\_%'`,
+    );
+    expect(views.map((v) => v.relname).sort()).toEqual(["my_inventory", "my_products", "my_purchases"]);
+    for (const v of views) {
+      expect(v.reloptions).toContain("security_invoker=true");
+      expect(v.app_reads).toBe(false);
+    }
+    // They read: each answers a plain select.
+    for (const v of views) await q(`select * from ${v.relname} limit 1`);
+  });
 });
 
 describe("A02-A04 catalogue, opening stock and weighing", () => {
