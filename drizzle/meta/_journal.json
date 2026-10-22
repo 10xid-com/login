@@ -379,6 +379,13 @@
       "when": 1790003700000,
       "tag": "0053_portal_password",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1790003800000,
+      "tag": "0054_simple_inventory_views",
+      "breakpoints": true
     }
   ]
 }
