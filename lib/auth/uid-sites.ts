@@ -23,25 +23,42 @@ import { PORTAL_HOST, PRIMARY_HOST } from "./sso";
  *                 and its host (uidSiteSecret), so one key here serves them
  *                 all and no UiD can act as another.
  *
+ *   UID_OTHER_HOSTS  comma-separated hosts outside 10xid.com that UID_SITES
+ *                 may also list: the sites that check 10XiD passwords on
+ *                 their own sign-in forms (app/api/uid/password), such as
+ *                 www.brandingcentres.com and wrapauthority.net. Named twice,
+ *                 here and in UID_SITES, so a typo in one cannot open
+ *                 sign-in to a stranger's domain.
+ *
  * Only hosts on a 10xid.com subdomain, other than this host and the portal's,
- * are taken. Without UID_SITE_KEY no UiD is.
+ * or listed in UID_OTHER_HOSTS, are taken. Without UID_SITE_KEY no UiD is.
  */
 
 const ALLOWED_SUFFIX = ".10xid.com";
 const HOST = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 const EMAIL = /^[^\s@|,=]+@[^\s@|,=]+\.[^\s@|,=]+$/;
 
+export function parseOtherHosts(raw: string | undefined): Set<string> {
+  return new Set(
+    (raw ?? "")
+      .split(",")
+      .map((h) => h.trim().toLowerCase())
+      .filter((h) => HOST.test(h) && !h.endsWith(ALLOWED_SUFFIX) && h !== ALLOWED_SUFFIX.slice(1)),
+  );
+}
+
 export function parseUidSites(
   raw: string | undefined,
   loginHost = "",
   portalHost = "",
+  otherHosts: ReadonlySet<string> = new Set(),
 ): Map<string, Set<string>> {
   const sites = new Map<string, Set<string>>();
   for (const entry of (raw ?? "").split(",")) {
     const at = entry.indexOf("=");
     if (at < 1) continue;
     const host = entry.slice(0, at).trim().toLowerCase();
-    if (!HOST.test(host) || !host.endsWith(ALLOWED_SUFFIX)) continue;
+    if (!HOST.test(host) || !(host.endsWith(ALLOWED_SUFFIX) || otherHosts.has(host))) continue;
     if (host === loginHost.toLowerCase() || host === portalHost.toLowerCase()) continue;
     const people = entry
       .slice(at + 1)
@@ -55,7 +72,12 @@ export function parseUidSites(
 
 /** The UiDs configured now, and who may open each. Read per call. */
 export function uidSites(): Map<string, Set<string>> {
-  return parseUidSites(process.env.UID_SITES, PRIMARY_HOST, PORTAL_HOST);
+  return parseUidSites(
+    process.env.UID_SITES,
+    PRIMARY_HOST,
+    PORTAL_HOST,
+    parseOtherHosts(process.env.UID_OTHER_HOSTS),
+  );
 }
 
 /** May this portal account's address open that UiD? */

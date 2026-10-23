@@ -317,6 +317,17 @@ export const PAGES: PageRecord[] = [
     file: "app/api/uid/alive/route.ts",
     methods: ["POST"],
     group: "Machinery",
+  },
+  {
+    id: "uid.password",
+    path: "/api/uid/password",
+    name: "Another site's sign-in — check a password",
+    purpose: "Branding Centres' and Wrap Authority's servers, each with its own secret, check a 10XiD address and password typed into their own sign-in forms.",
+    audience: "public",
+    kind: "machinery",
+    file: "app/api/uid/password/route.ts",
+    methods: ["POST"],
+    group: "Machinery",
   },  {
     id: "login.auth-api",
     path: "/api/auth/[...all]",

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { isUidSiteCaller, mayOpenUid, parseUidSites, uidSiteSecret } from "@/lib/auth/uid-sites";
+import { isUidSiteCaller, mayOpenUid, parseOtherHosts, parseUidSites, uidSiteSecret } from "@/lib/auth/uid-sites";
 
 /**
  * UID_SITES and UID_SITE_KEY: which UiD pages sign in through the login host,
@@ -43,6 +43,20 @@ describe("parseUidSites", () => {
     ]) {
       expect(parseUidSites(entry, "login.10xid.com", "app.10xid.com").size, entry).toBe(0);
     }
+  });
+});
+
+describe("sites outside 10xid.com", () => {
+  test("are taken only when UID_OTHER_HOSTS names them as well", () => {
+    const entry = "www.brandingcentres.com=paolo@tboxstudio.com,wrapauthority.net=paolo@tboxstudio.com";
+    expect(parseUidSites(entry, "login.10xid.com", "app.10xid.com").size).toBe(0);
+    const sites = parseUidSites(entry, "login.10xid.com", "app.10xid.com", parseOtherHosts(" WWW.BrandingCentres.com ,wrapauthority.net"));
+    expect([...sites.keys()]).toEqual(["www.brandingcentres.com", "wrapauthority.net"]);
+    expect(parseUidSites(entry, "", "", parseOtherHosts("brandingcentres.com")).size).toBe(0);
+  });
+
+  test("UID_OTHER_HOSTS takes bare hosts only, and never a 10xid.com one", () => {
+    expect([...parseOtherHosts("https://evil.test,evil.test:8443,evil.test/x,login.10xid.com,10xid.com,,ok.test")]).toEqual(["ok.test"]);
   });
 });
 

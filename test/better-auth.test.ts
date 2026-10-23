@@ -43,6 +43,7 @@ const { hashTicket } = await import("@/lib/auth/sso");
 const { uidSiteSecret } = await import("@/lib/auth/uid-sites");
 const { POST: uidRedeem } = await import("@/app/api/uid/redeem/route");
 const { POST: uidAlive } = await import("@/app/api/uid/alive/route");
+const { POST: sitePassword } = await import("@/app/api/uid/password/route");
 const { NextRequest } = await import("next/server");
 
 const owner = new Client({ connectionString: process.env.DATABASE_URL });
@@ -887,6 +888,89 @@ describe("UiD pages sign in through the login host", () => {
     expect(src).toContain("if (!uidAddress(uid, await accountAddresses(account.id)))");
     expect(src).toContain("userId: account.id");
     expect(src).toContain("audienceHost: uid");
+  });
+});
+
+describe("another site's own sign-in form checks a 10XiD password", () => {
+  const SITE = "www.brandingcentres.test";
+  const KEY = "a-test-only-uid-site-key-0123456789abcdef";
+  const post = (handler: (r: InstanceType<typeof NextRequest>) => Promise<Response>, body: unknown, secret = uidSiteSecret(SITE, KEY)) =>
+    handler(new NextRequest(`${env.origin}/api/uid/x`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${secret}`, "x-real-ip": "10.77.0.1" },
+      body: JSON.stringify(body),
+    }));
+
+  /** Invited, a password, bound to a portal account. No authenticator: this way in never asks for it. */
+  async function boundWithPassword(label: string) {
+    const { email } = await invitedAndSignedIn(label);
+    const id = (await authUserId(email))!;
+    await resolveAccount({ id, email, emailVerified: true, name: "x" });
+    return { email, account: (await userByAuthUserId(id))! };
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("UID_SITE_KEY", KEY);
+    vi.stubEnv("UID_OTHER_HOSTS", SITE);
+  });
+
+  test("the right password, for an address listed for that site, signs in there; nothing else does", async () => {
+    const { email, account } = await boundWithPassword("site-pw");
+    vi.stubEnv("UID_SITES", `${SITE}=${email}`);
+
+    const ok = await post(sitePassword, { host: SITE, email, password: PASSWORD });
+    expect(ok.status).toBe(200);
+    const body = (await ok.json()) as { email: string; name: string; stamp: string };
+    expect(body.email).toBe(email);
+    expect(typeof body.name).toBe("string");
+    expect(account.id).toBeTruthy();
+    expect(body.stamp).toMatch(/^[^.]+\.[A-Za-z0-9_-]{43}$/);
+
+    expect((await post(sitePassword, { host: SITE, email, password: PASSWORD }, "not-the-secret")).status).toBe(401);
+    expect((await post(sitePassword, { host: SITE, email, password: "not the password" })).status).toBe(400);
+    expect((await post(sitePassword, { host: SITE, email: address("nobody"), password: PASSWORD })).status).toBe(400);
+
+    vi.stubEnv("UID_SITES", `${SITE}=somebody-else@test.invalid`);
+    expect((await post(sitePassword, { host: SITE, email, password: PASSWORD })).status).toBe(400);
+  });
+
+  test("a site outside 10xid.com is known only when UID_OTHER_HOSTS names it too", async () => {
+    const { email } = await boundWithPassword("site-pw-other");
+    vi.stubEnv("UID_SITES", `${SITE}=${email}`);
+    vi.stubEnv("UID_OTHER_HOSTS", "");
+    expect((await post(sitePassword, { host: SITE, email, password: PASSWORD })).status).toBe(401);
+  });
+
+  test("the sign-in stays good until the password changes or the site stops listing the address", async () => {
+    const { email } = await boundWithPassword("site-pw-alive");
+    vi.stubEnv("UID_SITES", `${SITE}=${email}`);
+    const { stamp } = (await (await post(sitePassword, { host: SITE, email, password: PASSWORD })).json()) as { stamp: string };
+    const alive = async (body: unknown) => ((await (await post(uidAlive, body)).json()) as { alive: boolean }).alive;
+
+    expect(await alive({ host: SITE, stamp, email })).toBe(true);
+    expect(await alive({ host: SITE, stamp: `${stamp}x`, email })).toBe(false);
+    expect(await alive({ host: SITE, stamp, email: "somebody-else@test.invalid" })).toBe(false);
+
+    vi.stubEnv("UID_SITES", `${SITE}=somebody-else@test.invalid`);
+    expect(await alive({ host: SITE, stamp, email })).toBe(false);
+    vi.stubEnv("UID_SITES", `${SITE}=${email}`);
+    expect(await alive({ host: SITE, stamp, email })).toBe(true);
+
+    const ctx = await getAuth().$context;
+    await owner.query("update auth_accounts set password = $1 where user_id = $2 and provider_id = 'credential'", [
+      await ctx.password.hash("a brand new password 789"),
+      await authUserId(email),
+    ]);
+    expect(await alive({ host: SITE, stamp, email })).toBe(false);
+  });
+
+  test("wrong guesses for one address stop after ten", async () => {
+    const { email } = await boundWithPassword("site-pw-rate");
+    vi.stubEnv("UID_SITES", `${SITE}=${email}`);
+    for (let i = 0; i < 10; i++) {
+      expect((await post(sitePassword, { host: SITE, email, password: `wrong ${i}` })).status).toBe(400);
+    }
+    expect((await post(sitePassword, { host: SITE, email, password: PASSWORD })).status).toBe(429);
   });
 });
 

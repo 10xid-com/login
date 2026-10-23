@@ -27,6 +27,9 @@ export const LIMITS = {
   setPassword: { ip: { window: 600, max: 20 }, subject: { window: 600, max: 5 } },
   changeEmail: { ip: { window: 600, max: 10 }, subject: { window: 3600, max: 5 } },
   provider: { ip: { window: 600, max: 30 }, subject: { window: 600, max: 30 } },
+  // Another site's server asking for its visitors (app/api/uid/password): the
+  // address is that server's, shared by everyone signing in there.
+  sitePassword: { ip: { window: 300, max: 200 }, subject: { window: 900, max: 10 } },
 } satisfies Record<string, { ip: Rule; subject: Rule }>;
 
 async function hit(key: string, rule: Rule): Promise<boolean> {
@@ -43,15 +46,18 @@ async function hit(key: string, rule: Rule): Promise<boolean> {
   return Number(result.rows[0]?.count ?? 0) <= rule.max;
 }
 
-export async function clientAddress(): Promise<string> {
+export async function clientAddress(from?: Headers): Promise<string> {
   const header = (process.env.CLIENT_IP_HEADER || "x-real-ip").toLowerCase();
-  return ((await headers()).get(header) ?? "unknown").trim().slice(0, 64);
+  return ((from ?? (await headers())).get(header) ?? "unknown").trim().slice(0, 64);
 }
 
-/** True when this attempt is within both limits; counts it either way. */
-export async function allow(action: keyof typeof LIMITS, subject?: string): Promise<boolean> {
+/**
+ * True when this attempt is within both limits; counts it either way. A route
+ * handler passes its request's headers; a server action leaves them out.
+ */
+export async function allow(action: keyof typeof LIMITS, subject?: string, from?: Headers): Promise<boolean> {
   const rules = LIMITS[action];
-  const byAddress = await hit(`action:${action}:ip:${await clientAddress()}`, rules.ip);
+  const byAddress = await hit(`action:${action}:ip:${await clientAddress(from)}`, rules.ip);
   const bySubject = subject ? await hit(`action:${action}:sub:${subject.toLowerCase()}`, rules.subject) : true;
   return byAddress && bySubject;
 }
