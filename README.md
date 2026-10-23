@@ -72,6 +72,31 @@ difference: its server redeems the ticket here, server to server, rather than in
 `lib/auth/uid-sites.ts`), which that UiD's service holds as `UID_SITE_SECRET`. One key here
 serves every UiD, and no UiD can redeem another's tickets. Without the key, no UiD signs in.
 
+### Other sites' sign-in forms check 10XiD passwords
+
+Branding Centres (`www.brandingcentres.com`) and Wrap Authority (`wrapauthority.net`) keep their
+own sign-in pages, and a 10XiD address and password typed there works: one 10XiD account signs
+in on all of them, with nothing to sign up for on each site.
+
+1. The site's server posts `{ host, email, password }` to `/api/uid/password`, with
+   `Authorization: Bearer <its secret>`, the same per-site secret a UiD holds.
+2. Here: the password is checked against the 10XiD identity, which must be bound to a live
+   portal account with an address `UID_SITES` lists for that site. The answer is that address,
+   the person's name and a stamp, or one identical refusal whichever check failed. Ten wrong
+   guesses per address in fifteen minutes stop it.
+3. The site signs the person into its own account for that address (creating it the first
+   time) and decides itself what they may do there: admin access stays each site's own.
+4. Every few minutes it sends the stamp to `/api/uid/alive`. Changing the 10XiD password,
+   losing the account or being taken out of `UID_SITES` signs the person out there too.
+
+**This way in does not ask for the authenticator**, by decision: the point is that one password
+opens every listed site. A host outside 10xid.com has to be named twice, in `UID_SITES` and in
+`UID_OTHER_HOSTS`. Each site's secret, for its `TENXID_SITE_SECRET`:
+
+```bash
+node -e 'console.log(require("crypto").createHmac("sha256", process.env.UID_SITE_KEY).update("uid-site:" + process.argv[1]).digest("base64url"))' www.brandingcentres.com
+```
+
 `app.10xid.com` and `login.10xid.com` are siblings, but each one's session cookie is `__Host-`
 prefixed and so is never shared between them. That is deliberate — a cookie scoped to
 `.10xid.com` could be read or overwritten by any other subdomain.
