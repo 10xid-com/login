@@ -167,7 +167,7 @@ export async function accountStatus(
  */
 export function safeNext(input: unknown): string {
   const path = safePath(input);
-  if (path.startsWith("/auth/sso/authorize?") || path.startsWith("/auth/uid/authorize?") || path === "/auth/account") return path;
+  if (path.startsWith("/auth/sso/authorize?") || path.startsWith("/auth/uid/authorize?") || path.startsWith("/auth/wa/authorize?") || path === "/auth/account") return path;
   return "/";
 }
 
