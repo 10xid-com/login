@@ -34,6 +34,9 @@ describe('WA linking consent and MFA', () => {
   it('GET only prepares consent and never issues an authorization ticket', async () => {
     const {response,token}=await challenge(); expect(token).not.toBe('');
     expect(response.headers.get('location')).toBe(login+'/auth/wa/confirm'); expect(mocks.mint).not.toHaveBeenCalled();
+    const cookie = response.cookies.get('__Host-wa_consent');
+    expect(cookie).toMatchObject({ sameSite: 'lax', secure: true, httpOnly: true, path: '/', maxAge: 300 });
+    expect(cookie).not.toHaveProperty('domain');
   });
   it('refuses missing explicit consent, cross-origin POST, and changed sessions', async () => {
     const {token}=await challenge();

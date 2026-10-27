@@ -28,7 +28,9 @@ export async function GET(request: NextRequest) {
   const now = Date.now();
   const challenge = seal({ session: session.sessionId, clientId, redirectUri, state, nonce: makeOpaqueCode(), iat: now, exp: now + 300000 }, secret, "wa-consent");
   const response = NextResponse.redirect(new URL("/auth/wa/confirm", config.loginOrigin), { headers: noStore });
-  response.cookies.set("__Host-wa_consent", challenge, { secure: true, httpOnly: true, sameSite: "strict", path: "/", maxAge: 300 });
+  // The confirmation GET follows a cross-site navigation from Wrap Authority.
+  // Lax permits that redirect; POST still requires origin, session and consent proof.
+  response.cookies.set("__Host-wa_consent", challenge, { secure: true, httpOnly: true, sameSite: "lax", path: "/", maxAge: 300 });
   return response;
 }
 export async function POST(request: NextRequest) {
