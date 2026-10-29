@@ -51,11 +51,15 @@ export async function getLoginSession(): Promise<LoginIdentity | null> {
 }
 
 /**
- * Where the authenticator stands for one identity: none, set up but not yet
- * confirmed (with the secret, so the setup page can show it), or confirmed.
+ * Where the authenticator stands for one identity: none, pending enrollment,
+ * or confirmed. An unconfirmed secret is disclosed only to the
+ * session that started its enrollment. That session already proved the
+ * mailbox in mfaStartEnrollment; a password-only sign-in must not be able to
+ * copy another session's pending authenticator.
  */
 export async function authenticatorState(
   authUserId: string,
+  enrollmentSessionId?: string,
 ): Promise<{ state: "none" } | { state: "pending"; secret: string } | { state: "enrolled"; recoveryCodesLeft: number }> {
   const [factor] = await authDb()
     .select()
@@ -63,10 +67,14 @@ export async function authenticatorState(
     .where(eq(authTwoFactors.userId, authUserId))
     .limit(1);
   if (!factor) return { state: "none" };
-  const { secretConfig } = await getAuth().$context;
   if (!factor.verified) {
+    if (!enrollmentSessionId || factor.enrollingSessionId !== enrollmentSessionId) {
+      return { state: "none" };
+    }
+    const { secretConfig } = await getAuth().$context;
     return { state: "pending", secret: await symmetricDecrypt({ key: secretConfig, data: factor.secret }) };
   }
+  const { secretConfig } = await getAuth().$context;
   const codes = JSON.parse(await symmetricDecrypt({ key: secretConfig, data: factor.backupCodes })) as string[];
   return { state: "enrolled", recoveryCodesLeft: codes.length };
 }

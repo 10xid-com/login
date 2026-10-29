@@ -25,7 +25,7 @@ export default async function MfaSetupPage({
   const session = await getLoginSession();
   if (!session) redirect(`/auth/sign-in${nextQuery(next)}`);
   if (!session.user.emailVerified) redirect(`/auth/access${nextQuery(next)}`);
-  const factor = await authenticatorState(session.user.id);
+  const factor = await authenticatorState(session.user.id, session.sessionId);
   if (factor.state === "enrolled") redirect(`/auth/mfa${nextQuery(next)}`);
 
   if (factor.state === "none") {
