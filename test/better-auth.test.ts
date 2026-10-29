@@ -435,6 +435,12 @@ describe("review hardening", () => {
     const uri = started.json.totpURI as string;
     const other = new Browser();
     await signInWithCode(other, email);
+    const userId = (await authUserId(email))!;
+    const ownerSessionId = String((await b.session())!.session.id);
+    const otherSessionId = String((await other.session())!.session.id);
+    expect(await authenticatorState(userId)).toEqual({ state: "none" });
+    expect(await authenticatorState(userId, otherSessionId)).toEqual({ state: "none" });
+    expect((await authenticatorState(userId, ownerSessionId)).state).toBe("pending");
     expect((await other.call("/mfa/confirm-enrollment", { code: totp(uri) })).json.code).toBe("MFA_NO_PENDING_ENROLLMENT");
     expect((await b.call("/mfa/confirm-enrollment", { code: totp(uri) })).status).toBe(200);
   });
