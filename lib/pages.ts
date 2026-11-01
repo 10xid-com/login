@@ -78,6 +78,9 @@ export const GROUPS = [
 export type Group = (typeof GROUPS)[number];
 
 export const PAGES: PageRecord[] = [
+  { id: "wa.external-confirm", path: "/auth/wa/confirm", name: "Confirm Wrap Authority linking",
+    purpose: "Explicit consent and recent authenticator proof for the initiating account-link request.",
+    audience: "public", kind: "page", file: "app/auth/wa/confirm/page.tsx", group: "Machinery" },
   /* -------------------------------------------------------------- */
   /* Getting in                                                      */
   /* -------------------------------------------------------------- */
@@ -304,6 +307,28 @@ export const PAGES: PageRecord[] = [
     audience: "public",
     kind: "machinery",
     file: "app/api/uid/redeem/route.ts",
+    methods: ["POST"],
+    group: "Machinery",
+  },
+  {
+    id: "wa.external-authorize",
+    path: "/auth/wa/authorize",
+    name: "Wrap Authority account linking — authorize",
+    purpose: "A signed-in 10XiD account that passed MFA receives a short-lived ticket bound to the registered Wrap Authority client.",
+    audience: "public",
+    kind: "machinery",
+    file: "app/auth/wa/authorize/route.ts",
+    methods: ["GET", "POST"],
+    group: "Machinery",
+  },
+  {
+    id: "wa.external-redeem",
+    path: "/api/wa/redeem",
+    name: "Wrap Authority account linking — redeem",
+    purpose: "The registered Wrap Authority server exchanges one single-use ticket for a verified 10XiD account identifier.",
+    audience: "public",
+    kind: "machinery",
+    file: "app/api/wa/redeem/route.ts",
     methods: ["POST"],
     group: "Machinery",
   },
