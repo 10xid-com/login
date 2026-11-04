@@ -4,6 +4,7 @@ import {
   bigserial,
   boolean,
   char,
+  check,
   customType,
   date,
   foreignKey,
@@ -14,6 +15,7 @@ import {
   pgEnum,
   pgTable,
   pgView,
+  primaryKey,
   smallint,
   text,
   timestamp,
@@ -169,6 +171,18 @@ export const organizations = pgTable("organizations", {
    */
   isAgency: boolean("is_agency").notNull().default(false),
 });
+
+/** Collection ownership is separate from stock ownership and membership roles. */
+export const uidInventoryOwners = pgTable("uid_inventory_owners", {
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+  tool: text("tool").$type<"inventory" | "clothing">().notNull(),
+  ownerUserId: uuid("owner_user_id").notNull().references((): AnyPgColumn => users.id),
+  createdAt,
+}, t => [
+  primaryKey({ name: "uid_inventory_owners_pkey", columns: [t.organizationId, t.tool] }),
+  check("uid_inventory_owners_tool_check", sql`${t.tool} in ('inventory','clothing')`),
+  index("uid_inventory_owners_person").on(t.ownerUserId),
+]);
 
 /**
  * Which hostname belongs to which company. This drives BRANDING and ROUTING

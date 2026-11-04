@@ -407,6 +407,13 @@
       "when": 1790004100000,
       "tag": "0057_rana_clothing_access",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1790004200000,
+      "tag": "0058_uid_inventory_owners",
+      "breakpoints": true
     }
   ]
 }

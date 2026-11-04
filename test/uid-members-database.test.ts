@@ -20,7 +20,7 @@ const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const A=id(1),B=id(2),OWNER=id(10),EDITOR=id(11),VIEWER=id(12),OTHER=id(13),MANAGER=id(14);
 const actor=(userId:string,email:string):UidActor=>({userId,email,name:email,addresses:[email]});
 const owner=actor(OWNER,'owner@example.com'),editor=actor(EDITOR,'editor@example.com'),viewer=actor(VIEWER,'viewer@example.com'),other=actor(OTHER,'other@example.com'),manager=actor(MANAGER,'manager@example.com');
-let pg:PGlite;
+let pg:PGlite,ownershipMigration:string;
 beforeAll(async()=>{
  pg=new PGlite();await pg.waitReady;state.database=drizzle(pg);
  await pg.exec(`
@@ -43,6 +43,8 @@ beforeAll(async()=>{
   grant select,insert,update,delete on organizations,users,user_emails,memberships,permissions,invitations to portal_app;
   grant select,insert on audit_events to portal_app;grant usage,select on sequence audit_events_id_seq to portal_app;
  `);
+ ownershipMigration=await readFile(new URL('../drizzle/0058_uid_inventory_owners.sql',import.meta.url),'utf8');
+ await pg.exec(ownershipMigration);
  process.env.CLOTHING_BUSINESS_SLUG='tbox-studio';process.env.CLOTHING_API_URL='https://clothing.example.com';process.env.CLOTHING_API_KEY='x'.repeat(40);
 },60000);
 beforeEach(async()=>{
@@ -54,11 +56,55 @@ beforeEach(async()=>{
  }
  for(const [org,userId,role] of [[A,OWNER,'owner'],[A,EDITOR,'editor'],[A,VIEWER,'viewer'],[A,MANAGER,'manager'],[B,OTHER,'owner']])
   await pg.query('insert into memberships(organization_id,user_id,role) values($1,$2,$3)',[org,userId,role]);
+ await pg.query("insert into uid_inventory_owners(organization_id,tool,owner_user_id) values($1,'clothing',$2),($1,'inventory',$2),($3,'inventory',$4)",[A,OWNER,B,OTHER]);
  await pg.exec('set role portal_app');
 });
 afterAll(async()=>{await pg.close();});
 async function member(userId:string){return (await uidMembers(owner,A)).members.find(m=>m.id===userId)!;}
 describe('central Members data and authorization as a restricted role',()=>{
+ it('keeps the actual owner personal after sharing, while an Owner-role recipient stays shared',async()=>{
+  expect((await uidOverview(owner)).businesses[0].inventoryOwnership).toEqual({clothing:true,inventory:true});
+  await pg.query("update memberships set role='owner' where organization_id=$1 and user_id=$2",[A,EDITOR]);
+  const recipient=(await uidOverview(editor)).businesses[0];
+  expect(recipient.role).toBe('owner');expect(recipient.tools.clothing.level).toBe(3);
+  expect(recipient.inventoryOwnership).toEqual({clothing:false,inventory:false});
+  expect((await uidOverview(owner)).businesses[0].inventoryOwnership).toEqual({clothing:true,inventory:true});
+ });
+ it('keeps ownership metadata scoped to current members and prevents browser-role ownership rewrites',async()=>{
+  await pg.exec('begin');
+  await pg.query("select set_config('app.org_id',$1,true),set_config('app.user_id',$2,true)",[B,OWNER]);
+  expect((await pg.query('select * from uid_inventory_owners')).rows).toEqual([]);
+  await pg.exec('rollback');
+  await expect(pg.query('update uid_inventory_owners set owner_user_id=$1 where organization_id=$2',[VIEWER,A])).rejects.toThrow('permission denied');
+  const recipient=(await uidOverview(viewer)).businesses[0];
+  expect(recipient.inventoryOwnership).toEqual({clothing:false,inventory:false});
+  expect(JSON.stringify(recipient)).not.toContain(OWNER);
+ });
+ it('records Paolo ownership for both collections once without altering membership or access grants',async()=>{
+  await pg.exec('reset role;delete from uid_inventory_owners;');
+  await pg.query("update user_emails set email='paolo@tboxstudio.com' where user_id=$1",[OWNER]);
+  await pg.query("update organizations set name='Paolo Nutrient System' where id=$1",[B]);
+  await pg.query("insert into memberships(organization_id,user_id,role) values($1,$2,'owner')",[B,OWNER]);
+  const memberships=await pg.query('select organization_id,user_id,role from memberships order by organization_id,user_id');
+  const seed=ownershipMigration.split('--> statement-breakpoint').at(-1)!;
+  await pg.exec(seed);await pg.exec(seed);
+  expect((await pg.query('select organization_id,user_id,role from memberships order by organization_id,user_id')).rows).toEqual(memberships.rows);
+  expect((await pg.query('select count(*)::int as n from permissions')).rows).toEqual([{n:0}]);
+  expect((await pg.query("select count(*)::int as n from audit_events where action='inventory.owner_recorded'")).rows).toEqual([{n:2}]);
+  await pg.exec('set role portal_app');
+  const owned=(await uidOverview(owner)).businesses;
+  expect(owned.find(b=>b.id===A)?.inventoryOwnership.clothing).toBe(true);
+  expect(owned.find(b=>b.id===B)?.inventoryOwnership.inventory).toBe(true);
+  expect((await uidOverview(other)).businesses[0].inventoryOwnership.inventory).toBe(false);
+ });
+ it('refuses to replace a previously recorded different inventory owner',async()=>{
+  await pg.exec('reset role');
+  await pg.query("update user_emails set email='paolo@tboxstudio.com' where user_id=$1",[OWNER]);
+  await pg.query("update organizations set name='Paolo Nutrient System' where id=$1",[B]);
+  await pg.query("insert into memberships(organization_id,user_id,role) values($1,$2,'owner')",[B,OWNER]);
+  await expect(pg.exec(ownershipMigration.split('--> statement-breakpoint').at(-1)!)).rejects.toThrow('another recorded owner');
+  expect((await pg.query("select owner_user_id from uid_inventory_owners where organization_id=$1 and tool='inventory'",[B])).rows).toEqual([{owner_user_id:OTHER}]);
+ });
  it('uses the restricted role and shows only entitled business Channels',async()=>{
   expect((await pg.query<{current_user:string}>('select current_user')).rows[0].current_user).toBe('portal_app');
   const overview=await uidOverview(owner);expect(overview.businesses.map(b=>b.id)).toEqual([A]);

@@ -52,9 +52,16 @@ export async function uidOverview(actor: UidActor) {
   for (const entry of memberships.rows) {
     if (!isRole(entry.role)) continue;
     const id = String(entry.id), role = String(entry.role);
-    const level = await inOwnerTransaction(id,actor.userId,async tx => clothingLevel(role,await grants(tx,id,actor.userId)));
+    const access = await inOwnerTransaction(id,actor.userId,async tx => {
+      const level=clothingLevel(role,await grants(tx,id,actor.userId));
+      const ownership=await rows<{tool:'inventory'|'clothing';owned_by_you:boolean}>(tx,sql`
+        select tool,owner_user_id=${actor.userId}::uuid as owned_by_you
+        from uid_inventory_owners where organization_id=${id}::uuid`);
+      return {level,ownership:Object.fromEntries(ownership.map(item=>[item.tool,item.owned_by_you]))};
+    });
     businesses.push({ id, name: String(entry.name), role, roleLabel: ROLE_LABELS[entry.role], canManage: managesMembers(role),
-      tools: { clothing: { available: clothingConfiguredFor(String(entry.slug)), level } } });
+      inventoryOwnership:{inventory:access.ownership.inventory===true,clothing:access.ownership.clothing===true},
+      tools: { clothing: { available: clothingConfiguredFor(String(entry.slug)), level:access.level } } });
   }
   // Invitation discovery is SELECT-only, by this verified account's exact addresses.
   const incoming = await inAuthenticationTransaction(tx => rows(tx,sql`select i.id::text,i.organization_id::text as business_id,

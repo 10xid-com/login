@@ -57,6 +57,7 @@ const MUST_BE_PROTECTED = [
   // results, preferences and notes are its own, with no staff read policy:
   // naming a vendor shows that vendor nothing.
   "inventory_nutrients",
+  "uid_inventory_owners",
   "inventory_materials",
   "inventory_material_aliases",
   "inventory_businesses",
