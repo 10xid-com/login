@@ -8,6 +8,9 @@ let overview=null,business='',detail=null,opened=false,busy=false,request=0,clot
 const directory=new Map(),loadedScripts=new Map();
 const stage=document.createElement('section');stage.id='membersStage';stage.hidden=true;stage.setAttribute('aria-label','Members');
 (document.querySelector('main')||document.body).append(stage);
+const inventories=document.createElement('section');inventories.id='inventoriesStage';inventories.hidden=true;inventories.setAttribute('aria-label','Inventories');
+(document.querySelector('main')||document.body).append(inventories);
+let inventoryRequest=0,inventoryEntries=[],inventoryLoading=false;
 function selectedBusiness(){
  const current=overview?.businesses.find(b=>b.name.toLowerCase()===($('business')?.textContent||'').trim().toLowerCase());
  return current?.id||business||overview?.businesses[0]?.id||'';
@@ -44,7 +47,58 @@ function close(){opened=false;stage.hidden=true;document.body.classList.remove('
  heldChannels=null;
 }
 const home=root.showHome;
-if(typeof home==='function')root.showHome=function(){close();return home.apply(this,arguments);};
+if(typeof home==='function')root.showHome=function(){close();closeInventories();return home.apply(this,arguments);};
+function closeInventories(){inventoryRequest++;inventories.hidden=true;document.body.classList.remove('inventory-directory-open');}
+function inventoryCard(entry){
+ return `<button type="button" class="ui-inventory-card" data-inventory-open="${escape(entry.key)}"><span class="ui-inventory-kind">${entry.kind==='clothing'?'Clothing Inventory':'Inventory'}</span>
+ <strong>${escape(entry.name)}</strong><span class="ui-inventory-access">${escape(levels[entry.level])}<span aria-hidden="true"> →</span></span></button>`;
+}
+function renderInventories(error=''){
+ inventories.innerHTML=`<div class="um-top"><button type="button" data-inventories="home">← Control Room</button><button type="button" data-inventories="refresh">Refresh</button></div>
+ <div class="um-title"><div><h2>Inventory</h2><p>Choose an inventory to open.</p></div></div>
+ ${error?`<div class="um-notice um-error" role="alert">${escape(error)} <button type="button" data-inventories="refresh">Try again</button></div>`:''}
+ <section class="um-panel" aria-labelledby="personalInventoriesTitle"><div class="um-panel-head"><h3 id="personalInventoriesTitle">Personal inventories</h3><span class="um-count">0</span></div>
+ <p class="um-muted">No personal inventories connected to your UiD.</p></section>
+ <section class="um-panel" aria-labelledby="sharedInventoriesTitle"><div class="um-panel-head"><h3 id="sharedInventoriesTitle">Shared inventories</h3>${inventoryLoading?'':`<span class="um-count">${inventoryEntries.length}</span>`}</div>
+ ${inventoryLoading?'<p role="status">Loading your shared inventories…</p>':inventoryEntries.length?`<div class="ui-inventory-grid">${inventoryEntries.map(inventoryCard).join('')}</div>`:error?'<p class="um-muted">Your inventory list could not be fully loaded.</p>':'<p class="um-muted">No shared inventories are available to your UiD.</p>'}</section>`;
+}
+async function generalInventories(){
+ if(!root.InventoryUI?.openForBusiness)return [];
+ const response=await fetch('/api/inventory',{credentials:'same-origin',cache:'no-store'});
+ const body=await response.json();
+ if(response.status===404&&body.setup)return [];
+ if(!response.ok)throw Error(body.error||'Some inventories could not be loaded.');
+ return (body.businesses||[]).map(item=>({key:'inventory:'+item.id,id:item.id,name:item.name,kind:'inventory',level:2}));
+}
+async function openInventories(){
+ root.showHome?.();root.VendorUI?.leave?.();root.InventoryUI?.leave?.();root.ClothingUI?.leave?.();root.WorkDeck?.close?.();root.TaskUI?.closeCard?.();
+ const ticket=++inventoryRequest;inventories.hidden=false;document.body.classList.add('inventory-directory-open');inventoryEntries=[];inventoryLoading=true;renderInventories();
+ $('stage')?.scrollTo({top:0});
+ const results=await Promise.allSettled([refreshOverview(),generalInventories()]);
+ if(ticket!==inventoryRequest||inventories.hidden)return;
+ const [membersResult,generalResult]=results,errors=[];
+ if(membersResult.status==='fulfilled')inventoryEntries=membersResult.value.businesses
+  .filter(item=>item.tools?.clothing?.available&&item.tools.clothing.level>0)
+  .map(item=>({key:'clothing:'+item.id,id:item.id,name:item.name,kind:'clothing',level:item.tools.clothing.level}));
+ else errors.push('Shared Clothing inventories could not be loaded.');
+ if(generalResult.status==='fulfilled')inventoryEntries.push(...generalResult.value);
+ else errors.push(generalResult.reason.message||'Some inventories could not be loaded.');
+ inventoryEntries.sort((a,b)=>a.name.localeCompare(b.name)||a.kind.localeCompare(b.kind));inventoryLoading=false;renderInventories(errors.join(' '));
+}
+inventories.addEventListener('click',async event=>{
+ const button=event.target.closest('button');if(!button)return;
+ if(button.dataset.inventories==='home')return root.showHome?.();
+ if(button.dataset.inventories==='refresh')return openInventories();
+ const entry=inventoryEntries.find(item=>item.key===button.dataset.inventoryOpen);if(!entry)return;
+ inventories.querySelectorAll('button').forEach(node=>node.disabled=true);
+ try{
+  if(entry.kind==='clothing')await openClothing(entry.id);
+  else{root.showHome?.();root.InventoryUI.openForBusiness(entry.id);}
+ }catch(error){if(!inventories.hidden)renderInventories(error.message);}
+ finally{inventories.querySelectorAll('button').forEach(node=>node.disabled=false);}
+});
+// Paolo's existing menu opens independently of showHome; close the chooser before that menu renders.
+$('tenxButton')?.addEventListener('click',()=>{if(!inventories.hidden)root.showHome?.();},true);
 function header(){
  return `<div class="um-top"><button type="button" data-um="home">← Control Room</button><button type="button" data-um="refresh">Refresh</button></div>
  <div class="um-title"><div><span class="um-kicker">BUSINESS ACCESS</span><h2>Members</h2></div>
@@ -205,7 +259,7 @@ function applyClothingAccess(){
  clothing.querySelectorAll('button[value="publish"]').forEach(node=>restrict(node,'hidden',access<3));
 }
 const clothesObserver=new MutationObserver(applyClothingAccess);clothesObserver.observe(document.querySelector('main')||document.body,{childList:true,subtree:true});
-root.UIDMembers={open,close,openClothing,toolUrl(path){const url=new URL(path,location.origin);if(clothingBusiness)url.searchParams.set('business',clothingBusiness);return url.pathname+url.search;}};
+root.UIDMembers={open,close,openClothing,openInventories,toolUrl(path){const url=new URL(path,location.origin);if(clothingBusiness)url.searchParams.set('business',clothingBusiness);return url.pathname+url.search;}};
 reconcile();refreshOverview().catch(()=>{});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshOverview().then(()=>{applyClothingAccess();if(opened)load();}).catch(()=>{});});
 root.setInterval(()=>{if(!document.hidden)refreshOverview().then(applyClothingAccess).catch(()=>{});},30000);

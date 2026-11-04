@@ -40,3 +40,23 @@ body.members-open main>footer{display:none}
 .um-error{border-color:#a87575;background:#513537;color:#ffe3e3}
 .um-tool{flex-wrap:wrap}
 @media(max-width:600px){#membersStage{padding-top:2px}.um-panel{padding:17px}.um-title{gap:16px}.um-title label{width:100%}.um-row{gap:13px}.um-row>.um-actions{flex-basis:100%}.um-top{margin-bottom:14px}}
+
+/* One inventory chooser across UiDs. Business inventories stay separate from private inventories. */
+body.inventory-directory-open main>.heading,body.inventory-directory-open main>.grid,body.inventory-directory-open main>.legend,body.inventory-directory-open main>footer,body.inventory-directory-open #taskStage,body.inventory-directory-open #deskStage,body.inventory-directory-open #vendorStage,body.inventory-directory-open #inventoryStage,body.inventory-directory-open #clothingStage,body.inventory-directory-open #membersStage,body.inventory-directory-open #uidMenuStage,body.inventory-directory-open #postStage{display:none!important}
+#inventoriesStage[hidden]{display:none!important}
+#inventoriesStage{max-width:1100px;margin:0 auto;padding:8px 0 24px;color:#edf2f5;min-width:0}
+#inventoriesStage *{box-sizing:border-box}
+#inventoriesStage button{font:inherit;min-height:40px;border-radius:8px;border:1px solid #52616d;padding:9px 13px;background:#334959;color:#f2f6f8;cursor:pointer;font-size:13px}
+#inventoriesStage button:hover{background:#3e586b}
+#inventoriesStage button:disabled{opacity:.55;cursor:wait}
+#inventoriesStage button:focus-visible{outline:2px solid #a7c4dc;outline-offset:2px}
+#inventoriesStage h2{margin:5px 0 0;font-size:27px}
+#inventoriesStage h3{margin:0;font-size:17px}
+#inventoriesStage p{font-size:13px;line-height:1.55;margin:8px 0 0}
+.ui-inventory-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px;margin-top:18px}
+#inventoriesStage .ui-inventory-card{display:flex;flex-direction:column;align-items:flex-start;gap:13px;padding:20px;text-align:left;min-width:0;background:#293b49;border-color:#536773;overflow-wrap:anywhere}
+#inventoriesStage .ui-inventory-card:hover{background:#344d60;border-color:#8caabd}
+.ui-inventory-kind{color:#b4c8d6;font-size:12px}
+.ui-inventory-card strong{font-size:18px;font-weight:600}
+.ui-inventory-access{font-size:12px;color:#d0dde5;display:flex;justify-content:space-between;width:100%}
+@media(max-width:600px){#inventoriesStage{padding-top:2px}.ui-inventory-grid{grid-template-columns:1fr}#inventoriesStage .ui-inventory-card{padding:17px}}
