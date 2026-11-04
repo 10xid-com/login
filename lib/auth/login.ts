@@ -175,6 +175,7 @@ export async function accountStatus(
  */
 export function safeNext(input: unknown): string {
   const path = safePath(input);
+  if (/^\/auth\/cid\/(rotary|brandingcentres|vinylwraptoronto|wrapauthority|workweartoronto)$/.test(path)) return path;
   if (path.startsWith("/auth/sso/authorize?") || path.startsWith("/auth/uid/authorize?") || path === "/auth/account") return path;
   return "/";
 }

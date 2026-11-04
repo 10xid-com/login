@@ -58,6 +58,7 @@ const MUST_BE_PROTECTED = [
   // naming a vendor shows that vendor nothing.
   "inventory_nutrients",
   "uid_inventory_owners",
+  "cid_public_profiles",
   "inventory_materials",
   "inventory_material_aliases",
   "inventory_businesses",

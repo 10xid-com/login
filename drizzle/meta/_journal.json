@@ -414,6 +414,13 @@
       "when": 1790004200000,
       "tag": "0058_uid_inventory_owners",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790004300000,
+      "tag": "0059_cid_public_profiles",
+      "breakpoints": true
     }
   ]
 }
