@@ -27,7 +27,7 @@ beforeAll(async()=>{
   create role portal_app; create role portal_auth;
   create type membership_role as enum('owner','manager','editor','publisher','asset_manager','viewer','member','staff');
   create table organizations(id uuid primary key,name text,slug text unique,type text default 'client',member_visibility text default 'closed',deleted_at timestamptz);
-  create table users(id uuid primary key,email text,full_name text,is_service boolean default false,deleted_at timestamptz);
+  create table users(id uuid primary key,email text,full_name text,auth_user_id text,is_service boolean default false,deleted_at timestamptz);
   create table user_emails(user_id uuid references users,email text,is_primary boolean default true,verified_at timestamptz default now());
   create table memberships(id uuid default gen_random_uuid(),organization_id uuid references organizations,user_id uuid references users,role membership_role,updated_at timestamptz default now(),unique(user_id,organization_id));
   create table permissions(id uuid default gen_random_uuid(),organization_id uuid references organizations,user_id uuid references users,capability text,scope_type text,scope_id uuid,deny boolean default false,granted_by uuid references users,revoked_at timestamptz);
@@ -117,5 +117,40 @@ describe('central Members data and authorization as a restricted role',()=>{
   expect(role).toBe('owner');
   expect((await pg.query('select * from audit_events')).rows).toHaveLength(1);
   expect((await pg.query<{role:string}>('select role from memberships where user_id=$1 and organization_id=$2',[VIEWER,A])).rows[0].role).toBe('viewer');
+ });
+ it('adds only the verified Rana account with inventory editing and records the owner decision once',async()=>{
+  await pg.exec('reset role');
+  await pg.query("update user_emails set email='paolo@tboxstudio.com' where user_id=$1",[OWNER]);
+  await pg.query("update users set email='web@brandingcentres.com',full_name='Rana',auth_user_id='auth-rana' where id=$1",[OTHER]);
+  await pg.query("update user_emails set email='web@brandingcentres.com' where user_id=$1",[OTHER]);
+  const migration=await readFile(new URL('../drizzle/0057_rana_clothing_access.sql',import.meta.url),'utf8');
+  await pg.exec(migration);await pg.exec(migration);await pg.exec('set role portal_app');
+  const rana=actor(OTHER,'web@brandingcentres.com');
+  const response=await uidMembers(rana,A);
+  expect(response.members.map(m=>m.id)).toEqual([OTHER]);
+  expect(response.members[0].role).toBe('viewer');expect(response.canManage).toBe(false);
+  expect((await uidClothingAccess(rana,A)).level).toBe(2);
+  expect((await uidMembers(owner,A)).members.find(m=>m.id===VIEWER)?.role).toBe('viewer');
+  await pg.exec('reset role');
+  expect((await pg.query("select capability from permissions where user_id=$1 and organization_id=$2 and revoked_at is null order by capability",[OTHER,A])).rows)
+    .toEqual([{capability:'clothing.read'},{capability:'clothing.write'}]);
+  expect((await pg.query("select role from memberships where user_id=$1 and organization_id=$2",[OTHER,B])).rows).toEqual([{role:'owner'}]);
+  expect((await pg.query('select actor_user_id from audit_events')).rows).toEqual([{actor_user_id:OWNER}]);
+ });
+ it('refuses Rana setup without the exact existing linked account',async()=>{
+  await pg.exec('reset role');
+  const migration=await readFile(new URL('../drizzle/0057_rana_clothing_access.sql',import.meta.url),'utf8');
+  await expect(pg.exec(migration)).rejects.toThrow('existing, sign-in-linked Rana account');
+  expect((await pg.query('select count(*)::int as n from permissions')).rows[0]).toEqual({n:0});
+ });
+ it('does not overwrite an unexpected existing TBox role for Rana',async()=>{
+  await pg.exec('reset role');
+  await pg.query("update user_emails set email='paolo@tboxstudio.com' where user_id=$1",[OWNER]);
+  await pg.query("update users set email='web@brandingcentres.com',full_name='Rana',auth_user_id='auth-rana' where id=$1",[OTHER]);
+  await pg.query("update user_emails set email='web@brandingcentres.com' where user_id=$1",[OTHER]);
+  await pg.query("insert into memberships(organization_id,user_id,role) values($1,$2,'owner')",[A,OTHER]);
+  const migration=await readFile(new URL('../drizzle/0057_rana_clothing_access.sql',import.meta.url),'utf8');
+  await expect(pg.exec(migration)).rejects.toThrow('different TBox role');
+  expect((await pg.query('select role from memberships where organization_id=$1 and user_id=$2',[A,OTHER])).rows).toEqual([{role:'owner'}]);
  });
 });
