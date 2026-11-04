@@ -113,3 +113,16 @@ adapted to the company workspace.
 Deploy the login routes and the Rana adapter from their existing repositories.
 Rana's Post action opens the same company workspace; the protected CiD profile
 editor also links to Blog Posts. No new database, volume or secret is required.
+
+
+## One CiD entry point, two views
+
+The company hostname is the shared entry point. Anonymous visitors and accounts
+without company editing permission stay on the public profile, which has no
+Manage, Edit, Swap or customization controls. A credentialed browser request to
+`/api/cid/<slug>/access` returns only `canEdit`, with exact-company CORS and
+private no-store caching. It requires a current session, MFA, a bound account and
+the same live company permission check as editing. Authorized editors are routed
+automatically to the protected member editor. The explicit `?view=public` preview
+lets members inspect the visitor version without a routing loop. Server-side
+write authorization remains mandatory regardless of this browser routing hint.

@@ -19,7 +19,7 @@ export default async function CidEditor({params,searchParams}:{params:Promise<{s
   let data;
   try{data=await editableCid(slug,account.id);}catch(error){
     if(error instanceof MemberError && error.status===403)redirect(cidUrl(slug));
-    return <AuthCard title={CID_COMPANIES[slug].name} intro="Company profile"><p role="alert">{error instanceof MemberError?error.message:'The company profile is temporarily unavailable.'}</p><p><a href={cidUrl(slug)}>View public CiD →</a></p><p><a href="/auth/account">Account settings</a></p></AuthCard>;
+    return <AuthCard title={CID_COMPANIES[slug].name} intro="Company profile"><p role="alert">{error instanceof MemberError?error.message:'The company profile is temporarily unavailable.'}</p><p><a href={cidUrl(slug)+'?view=public'}>View public CiD →</a></p><p><a href="/auth/account">Account settings</a></p></AuthCard>;
   }
   const query=await searchParams;
   const errors:Record<string,string>={conflict:'This profile changed or is not connected. Reload before saving again.',invalid:'Check the profile fields and website links.',denied:'Your account no longer has permission to edit this company.',unavailable:'The profile could not be saved. Please try again.'};
@@ -36,6 +36,6 @@ export default async function CidEditor({params,searchParams}:{params:Promise<{s
       </label>)}
       <label className={labelClass}><input name="showOwnership" type="checkbox" defaultChecked={data.profile.showOwnership}/> Display the ownership label publicly</label>
       <button type="submit" className="rounded-lg bg-slate-100 px-4 py-3 text-slate-950">Publish company profile</button>
-    </form><p><a href={cidUrl(slug)}>View public CiD →</a></p>
+    </form><p><a href={cidUrl(slug)+'?view=public'}>View public CiD →</a></p>
   </AuthCard>;
 }
