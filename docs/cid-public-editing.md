@@ -85,3 +85,31 @@ is idempotent and tested against isolated PostgreSQL semantics.
 Signed-in users without a linked account or company profile-editing permission
 are redirected automatically from the editor URL to the matching public CiD.
 Authorized editors keep the editor; operational failures remain visible for retry.
+
+## Shared company Blog Posts
+
+`/auth/cid/<slug>/blogs` serves Rana's existing blog editor as a company tool.
+The login service requires a current session, MFA, a linked account and live
+company editing permission for every document, asset and API request. Non-members
+opening the workspace go directly to the public CiD. The server alone holds the
+fixed Rana service credential; browser cookies and client credentials are never
+forwarded. Mutations require the login origin.
+
+The private Rana adapter maps each CiD to its fixed existing business stage.
+It reuses the existing shared draft store, so previous Rana drafts remain
+available without moving or copying content. Reads and tombstones are filtered by
+company. Creates, ID overwrites and deletions enforce company scope inside the
+same serialized state operation. The adapter excludes shop, quotes, member,
+account-connection and arbitrary proxy routes.
+
+Branding Centres, Vinyl Wrap Toronto and Workwear Toronto retain their existing
+website publishing destinations. Rotary and Wrap Authority support shared drafts;
+website publication stays disabled until a real connector is configured. Published
+articles remain public on the connected company website; drafts are never added
+to the anonymous CiD profile API. Existing social connections can supply embeds;
+connection changes remain in the original service until their callback flow is
+adapted to the company workspace.
+
+Deploy the login routes and the Rana adapter from their existing repositories.
+Rana's Post action opens the same company workspace; the protected CiD profile
+editor also links to Blog Posts. No new database, volume or secret is required.

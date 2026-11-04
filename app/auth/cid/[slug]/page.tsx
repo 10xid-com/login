@@ -27,6 +27,7 @@ export default async function CidEditor({params,searchParams}:{params:Promise<{s
     <p>Signed in as {session.user.email}. Everything saved in this form is public. Members, jobs, tasks and customer information stay private.</p>
     {query.saved==='1'&&<p role="status">Company profile published. Changes are now shared across devices.</p>}
     {query.error&&<p role="alert">{errors[query.error]||'The profile could not be saved.'}</p>}
+    <p><a href={`/auth/cid/${slug}/blogs`}>Blog Posts →</a></p>
     <form action={publishCid.bind(null,slug)} className="space-y-4">
       <input type="hidden" name="version" value={data.version}/>
       <ActionPicker initial={data.profile.actions}/>
