@@ -52,8 +52,14 @@ BEGIN
   SELECT id INTO v_tbox FROM organizations WHERE slug='tbox-studio' AND deleted_at IS NULL;
   SELECT count(*) INTO v_count FROM organizations
     WHERE name='Paolo Nutrient System' AND deleted_at IS NULL;
-  IF v_tbox IS NULL OR v_count<>1 THEN
-    RAISE EXCEPTION 'Inventory ownership requires the existing TBox and Paolo Nutrient System collections.';
+  -- A fresh installation need not contain Paolo's private production inventory.
+  -- Keep absence fail-closed: no metadata, membership or permission is created.
+  IF v_tbox IS NULL OR v_count=0 THEN
+    RAISE NOTICE '[0058] Existing inventory collections not present; ownership setup skipped.';
+    RETURN;
+  END IF;
+  IF v_count<>1 THEN
+    RAISE EXCEPTION 'Inventory ownership requires one existing Paolo Nutrient System collection.';
   END IF;
   SELECT id INTO v_nutrients FROM organizations WHERE name='Paolo Nutrient System' AND deleted_at IS NULL;
   SELECT count(*) INTO v_count FROM memberships

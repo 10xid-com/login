@@ -183,10 +183,12 @@ describe('central Members data and authorization as a restricted role',()=>{
   expect((await pg.query("select role from memberships where user_id=$1 and organization_id=$2",[OTHER,B])).rows).toEqual([{role:'owner'}]);
   expect((await pg.query('select actor_user_id from audit_events')).rows).toEqual([{actor_user_id:OWNER}]);
  });
- it('refuses Rana setup without the exact existing linked account',async()=>{
+ it('skips Rana setup without the exact existing linked account and grants nothing',async()=>{
   await pg.exec('reset role');
   const migration=await readFile(new URL('../drizzle/0057_rana_clothing_access.sql',import.meta.url),'utf8');
-  await expect(pg.exec(migration)).rejects.toThrow('existing, sign-in-linked Rana account');
+  const before=(await pg.query('select organization_id,user_id,role from memberships order by organization_id,user_id')).rows;
+  await pg.exec(migration);
+  expect((await pg.query('select organization_id,user_id,role from memberships order by organization_id,user_id')).rows).toEqual(before);
   expect((await pg.query('select count(*)::int as n from permissions')).rows[0]).toEqual({n:0});
  });
  it('does not overwrite an unexpected existing TBox role for Rana',async()=>{
