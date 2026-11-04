@@ -68,5 +68,16 @@ The shared profile also stores six distinct allowlisted Action buttons. Swap and
 existing button swaps slots, matching PiD behaviour. Publishing saves the company
 layout for all devices. Public contact links are clickable; the Location section
 links to a verified Google Maps URL or a Google Maps search for the company and
-its published address. Rotary contact/social/location fields remain unpopulated
-until verified. No contact information is borrowed from another company.
+its published address. Migration 0060 fills empty Rotary contact/location fields
+from https://rotary.brandingcentres.com/contact, verified November 4, 2026:
+Rotary@BrandingCentres.com, +1 416-288-8661, and 24 Ronson Drive, Unit 1,
+Etobicoke, ON M9W 1B4, Canada, with its published Google Maps directions link.
+No dedicated store social accounts were published there; those remain unset.
+Existing editor-published values are preserved. No contact information is borrowed
+from another company.
+
+Migration 0060 also assigns the existing sign-in-linked Paolo TBox owner an Editor
+membership in Workwear Toronto only. It preserves stronger existing roles and all
+other memberships, honours an explicit editing denial, and audits the change.
+Missing or ambiguous identity/mapping checks cannot grant access. The migration
+is idempotent and tested against isolated PostgreSQL semantics.
