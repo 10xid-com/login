@@ -78,6 +78,9 @@ export const GROUPS = [
 export type Group = (typeof GROUPS)[number];
 
 export const PAGES: PageRecord[] = [
+  { id: "cid.editing-access", path: "/api/cid/[slug]/access", name: "Company editing visibility",
+    purpose: "Reveal only whether this signed-in account may edit the exact matching public CiD.",
+    audience: "public", kind: "machinery", file: "app/api/cid/[slug]/access/route.ts", methods: ["GET"], group: "Machinery" },
   { id: "cid.blog-workspace", path: "/auth/cid/[slug]/blogs", name: "Company Blog Posts",
     purpose: "Assigned company editors use the shared Rana blog editor and existing company drafts.",
     audience: "member", kind: "machinery", file: "app/auth/cid/[slug]/blogs/route.ts", methods: ["GET"], group: "The work" },
