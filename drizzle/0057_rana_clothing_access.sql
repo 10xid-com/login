@@ -16,6 +16,8 @@ BEGIN
   SELECT count(DISTINCT u.id) INTO v_count FROM users u JOIN user_emails e ON e.user_id=u.id
    WHERE e.email='web@brandingcentres.com' AND (e.is_primary OR e.verified_at IS NOT NULL)
      AND u.full_name='Rana' AND u.auth_user_id IS NOT NULL AND u.deleted_at IS NULL AND NOT u.is_service;
+  -- Fresh installations/CI have no production Rana sign-in. Absence grants nothing.
+  IF v_count=0 THEN RAISE NOTICE '[0057] No existing linked Rana account; no access granted.'; RETURN; END IF;
   IF v_count<>1 THEN RAISE EXCEPTION 'Rana inventory setup requires one existing, sign-in-linked Rana account at web@brandingcentres.com.'; END IF;
   SELECT DISTINCT u.id INTO v_user FROM users u JOIN user_emails e ON e.user_id=u.id
    WHERE e.email='web@brandingcentres.com' AND (e.is_primary OR e.verified_at IS NOT NULL)

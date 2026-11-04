@@ -1,0 +1,72 @@
+# Public company identities and member editing
+
+The five CiD hostnames remain anonymous public pages on the existing Cloudflare
+Worker. `GET /api/profile` reads a fixed company-specific public projection from
+`login.10xid.com/api/cid/<slug>`. No browser cookies or bearer credentials are
+forwarded. The response contains only the explicitly published profile fields,
+version, slug and connection status. The new public table holds no member,
+customer, job, task or private contact data. No existing business data is published.
+
+Manage CiD opens `/auth/cid/<slug>` on the existing login service. The editor
+requires a current sign-in, MFA, a bound account and a live membership in that
+exact company. Owner, Manager, Editor and Publisher roles can edit; other assigned
+members need an explicit `cid.profile.write` capability. An explicit deny wins.
+A grant without membership gives no access. Each save repeats authorization and
+checks Origin, field lengths, URLs and the profile version. Membership changes
+and saves use the same business lock. Postgres RLS independently restricts writes.
+Changes publish immediately, persist in Railway and append an audit event.
+Concurrent overwrites are rejected. Public pages do not import old browser drafts.
+
+Only the public profile has a new editing workflow. Existing work features and
+membership management retain their existing permission checks. Jobs, tasks and
+member placeholders are hidden from the public CiDs; this release does not expose
+or add editing APIs for those unfinished CiD integrations.
+
+## Exact company mappings
+
+| CiD slug | Existing organization slug |
+|---|---|
+| rotary | rotary-store |
+| brandingcentres | branding-centres |
+| vinylwraptoronto | vinyl-wrap-toronto |
+| wrapauthority | wrap-authority |
+| workweartoronto | workwear-toronto |
+
+Rotary maps to the merchandise business, not the separate `rotary` club record.
+Migration 0059 adds profiles populated only from verified public company websites to matching live organizations and
+preserves their members, identities and private records. If Wrap Authority does
+not exist under this slug or name, it can create that requested organization and
+assign its existing verified TBox owner, Paolo, after checking his live TBox Owner
+membership. Other missing mappings are reported and remain read-only; no fuzzy
+matching, merging or reassignment occurs. Existing CiD/iD codes are not changed.
+
+## Release
+
+1. Review migration 0059's mappings and the conditional new Wrap Authority owner
+   membership. Confirm a current database backup through the existing runbook.
+2. Publish the login changes through its existing deployment branch, applying
+   the additive migration through the existing migration command.
+3. Verify all five `GET /api/cid/<slug>` responses report `connected: true`.
+   Resolve a missing mapping explicitly before enabling editing for it.
+4. Build `prototypes/company-id/build-worker.mjs` and update the existing
+   `10xid-company-identities` Worker, preserving its custom domains and settings.
+5. Check anonymous public views, signed-out editing redirects, an authorized
+   save, a viewer/unrelated account denial and revoked membership denial.
+
+No new environment secrets, authentication service or database is needed.
+Rollback: return the Worker and login code to their previous releases. Leave the
+additive profile table and audit history in place; never drop public edits to
+roll back an interface change.
+
+Validation uses isolated PGlite PostgreSQL semantics (including restricted-role
+RLS), mocked session/action boundaries and Node Worker tests, without production
+credentials or writes. End-to-end production login/save verification follows the
+approved release, not these isolated tests.
+
+The shared profile also stores six distinct allowlisted Action buttons. Swap and
+0.7-second hold/right-click open the protected company editor. Choosing an
+existing button swaps slots, matching PiD behaviour. Publishing saves the company
+layout for all devices. Public contact links are clickable; the Location section
+links to a verified Google Maps URL or a Google Maps search for the company and
+its published address. Rotary contact/social/location fields remain unpopulated
+until verified. No contact information is borrowed from another company.
