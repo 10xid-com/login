@@ -43,7 +43,7 @@ CREATE POLICY cid_member_write ON cid_public_profiles FOR UPDATE TO portal_app U
 -- Exact existing business slugs: rotary-store is the merchandise business,
 -- deliberately not the separate rotary club record. Never rename/merge identities.
 DO $$
-DECLARE r record; v_org uuid; v_owner uuid; v_count int;
+DECLARE r record; v_org uuid; v_owner uuid; v_count int; v_public jsonb;
 BEGIN
   FOR r IN SELECT * FROM (VALUES
     ('rotary','rotary-store','Rotary'),
@@ -78,8 +78,17 @@ BEGIN
       RAISE NOTICE '[0059] % needs explicit organization mapping; no profile or permission created.',r.slug;
       CONTINUE;
     END IF;
+    -- Public details verified on the companies’ official websites, 2026-11-04.
+    -- Rotary contact/social/location values remain unset until verified.
+    v_public := CASE r.slug
+      WHEN 'brandingcentres' THEN '{"website": "https://www.brandingcentres.com/", "phone": "+1 416-288-8661", "email": "info@brandingcentres.com", "address": "24 Ronson Drive, Unit 1, Etobicoke, ON M9W 1B4, Canada", "description": "Printing, signage, custom apparel and branding services in Toronto and the GTA.", "instagram": "https://www.instagram.com/brandingcentres/", "facebook": "https://www.facebook.com/brandingcentresca/"}'::jsonb
+      WHEN 'vinylwraptoronto' THEN '{"website": "https://vinylwraptoronto.com/", "phone": "+1 416-746-1381", "email": "info@vinylwraptoronto.com", "address": "24 Ronson Drive, Unit 1, Etobicoke, ON M9W 1B4, Canada", "description": "Vehicle wraps, lettering, decals and signage for businesses and personal vehicles in Toronto and the GTA.", "instagram": "https://www.instagram.com/vinylwraptoronto/", "facebook": "https://www.facebook.com/vinylwrapto/", "linkedin": "https://www.linkedin.com/in/vinyl-wrap-toronto-469489186/", "mapsUrl": "https://g.page/vinylwraptoronto?share"}'::jsonb
+      WHEN 'workweartoronto' THEN '{"website": "https://workweartoronto.com/", "phone": "+1 647-533-7223", "email": "info@workweartoronto.com", "address": "24 Ronson Drive, Unit 1, Etobicoke, ON M9W 1B4, Canada", "description": "Custom branded workwear, corporate apparel and promotional products, with embroidery, printing and heat transfer decoration.", "instagram": "https://www.instagram.com/workweartoronto/", "facebook": "https://www.facebook.com/WorkWearToronto", "linkedin": "https://www.linkedin.com/in/workwear-toronto-85b552199/", "mapsUrl": "https://g.page/workweartoronto?share"}'::jsonb
+      WHEN 'wrapauthority' THEN '{"website": "https://wrapauthority.net/", "phone": "+1 416-288-8661", "email": "info@brandingcentres.com", "address": "24 Ronson Drive, Unit 1, Etobicoke, ON M9W 1B4, Canada", "description": "Vehicle wrap templates, film and wrap services for designers, wrap shops and businesses.", "instagram": "https://www.instagram.com/wrapauthority/", "facebook": "https://www.facebook.com/wrapauthority"}'::jsonb
+      WHEN 'rotary' THEN '{"website": "https://rotary.brandingcentres.com/", "description": "Rotary branded gear, apparel and promotional merchandise."}'::jsonb
+      ELSE '{}'::jsonb END;
     INSERT INTO cid_public_profiles(slug,organization_id,profile)
-      VALUES(r.slug,v_org,jsonb_build_object('displayName',r.display_name,'showOwnership',false)) ON CONFLICT DO NOTHING;
+      VALUES(r.slug,v_org,jsonb_build_object('displayName',r.display_name,'showOwnership',false) || v_public) ON CONFLICT DO NOTHING;
     RAISE NOTICE '[0059] % public profile connected to existing organization %.',r.slug,v_org;
   END LOOP;
 END

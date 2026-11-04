@@ -5,9 +5,10 @@ import {editableCid} from '@/lib/db/cid-profiles';
 import {CID_COMPANIES,isCidSlug,cidUrl,PROFILE_LIMITS} from '@/lib/cid/profile';
 import {MemberError} from '@/lib/uid/member-policy';
 import {publishCid} from './actions';
+import {ActionPicker} from './action-picker';
 import {AuthCard,inputClass,labelClass} from '../../auth-card';
 export const dynamic='force-dynamic';
-const LABELS:Record<keyof typeof PROFILE_LIMITS,string>={displayName:'Display name',description:'About the company',website:'Website',email:'Public contact email',phone:'Public phone',address:'Public address',instagram:'Instagram',facebook:'Facebook',linkedin:'LinkedIn',ownershipLabel:'Ownership label',logoUrl:'Logo image URL (HTTPS)'};
+const LABELS:Record<keyof typeof PROFILE_LIMITS,string>={displayName:'Display name',description:'About the company',website:'Website',email:'Public contact email',phone:'Public phone',address:'Public address',instagram:'Instagram',facebook:'Facebook',linkedin:'LinkedIn',ownershipLabel:'Ownership label',logoUrl:'Logo image URL (HTTPS)',mapsUrl:'Google Maps location URL'};
 export default async function CidEditor({params,searchParams}:{params:Promise<{slug:string}>;searchParams:Promise<{saved?:string;error?:string}>}){
   const {slug}=await params;if(!isCidSlug(slug))notFound();
   const back=`/auth/cid/${slug}`,session=await getLoginSession();
@@ -27,8 +28,9 @@ export default async function CidEditor({params,searchParams}:{params:Promise<{s
     {query.error&&<p role="alert">{errors[query.error]||'The profile could not be saved.'}</p>}
     <form action={publishCid.bind(null,slug)} className="space-y-4">
       <input type="hidden" name="version" value={data.version}/>
+      <ActionPicker initial={data.profile.actions}/>
       {Object.entries(PROFILE_LIMITS).map(([field,max])=><label key={field} className={labelClass}>{LABELS[field as keyof typeof LABELS]}
-        {['description','address'].includes(field)?<textarea name={field} defaultValue={data.profile[field as keyof typeof PROFILE_LIMITS]} maxLength={max} rows={3} className={inputClass}/>:<input name={field} defaultValue={data.profile[field as keyof typeof PROFILE_LIMITS]} maxLength={max} required={field==='displayName'} type={field==='email'?'email':['website','instagram','facebook','linkedin','logoUrl'].includes(field)?'url':'text'} className={inputClass}/>}
+        {['description','address'].includes(field)?<textarea name={field} defaultValue={data.profile[field as keyof typeof PROFILE_LIMITS]} maxLength={max} rows={3} className={inputClass}/>:<input name={field} defaultValue={data.profile[field as keyof typeof PROFILE_LIMITS]} maxLength={max} required={field==='displayName'} type={field==='email'?'email':['website','instagram','facebook','linkedin','logoUrl','mapsUrl'].includes(field)?'url':'text'} className={inputClass}/>}
       </label>)}
       <label className={labelClass}><input name="showOwnership" type="checkbox" defaultChecked={data.profile.showOwnership}/> Display the ownership label publicly</label>
       <button type="submit" className="rounded-lg bg-slate-100 px-4 py-3 text-slate-950">Publish company profile</button>

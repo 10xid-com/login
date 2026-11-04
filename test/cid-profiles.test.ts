@@ -11,7 +11,7 @@ vi.mock('@/lib/db/connection',()=>({
  }),
 }));
 import {publicCid,editableCid,saveCid} from '@/lib/db/cid-profiles';
-import {emptyProfile,validateProfile,mayEditCid} from '@/lib/cid/profile';
+import {emptyProfile,validateProfile,mayEditCid,validateActions} from '@/lib/cid/profile';
 const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const A=id(1),B=id(2),OWNER=id(10),VIEWER=id(11),OTHER=id(12);
 let pg:PGlite;
@@ -39,6 +39,14 @@ beforeEach(async()=>{
 });
 afterAll(async()=>{await pg.close();});
 describe('public CiD data and member-only editing',()=>{
+ it('validates shared company Action layouts and restricts Maps links to Google',()=>{
+  expect(validateActions(undefined)).toHaveLength(6);
+  expect(validateActions(['phone','profile','links','website','email','address'])[0]).toBe('phone');
+  expect(()=>validateActions(['phone','phone','links','website','email','address'])).toThrow();
+  expect(()=>validateActions(['foreign'])).toThrow();
+  expect(()=>validateProfile({...emptyProfile('rotary'),mapsUrl:'https://evil.example/location'})).toThrow();
+  expect(validateProfile({...emptyProfile('rotary'),mapsUrl:'https://g.page/workweartoronto?share'}).mapsUrl).toContain('g.page');
+ });
  it('connects only the exact existing organizations without changing their memberships',async()=>{
   await pg.exec('reset role');
   const before=await pg.query('select organization_id,user_id,role from memberships order by organization_id,user_id');

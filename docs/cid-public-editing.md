@@ -33,7 +33,7 @@ or add editing APIs for those unfinished CiD integrations.
 | workweartoronto | workwear-toronto |
 
 Rotary maps to the merchandise business, not the separate `rotary` club record.
-Migration 0059 adds only empty public profiles to matching live organizations and
+Migration 0059 adds profiles populated only from verified public company websites to matching live organizations and
 preserves their members, identities and private records. If Wrap Authority does
 not exist under this slug or name, it can create that requested organization and
 assign its existing verified TBox owner, Paolo, after checking his live TBox Owner
@@ -62,3 +62,11 @@ Validation uses isolated PGlite PostgreSQL semantics (including restricted-role
 RLS), mocked session/action boundaries and Node Worker tests, without production
 credentials or writes. End-to-end production login/save verification follows the
 approved release, not these isolated tests.
+
+The shared profile also stores six distinct allowlisted Action buttons. Swap and
+0.7-second hold/right-click open the protected company editor. Choosing an
+existing button swaps slots, matching PiD behaviour. Publishing saves the company
+layout for all devices. Public contact links are clickable; the Location section
+links to a verified Google Maps URL or a Google Maps search for the company and
+its published address. Rotary contact/social/location fields remain unpopulated
+until verified. No contact information is borrowed from another company.
