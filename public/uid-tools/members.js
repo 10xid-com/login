@@ -58,7 +58,7 @@ function received(){
  <div class="um-actions"><button type="button" data-um="accept" data-id="${escape(invite.id)}" data-business="${escape(invite.business_id)}">Accept</button>
  <button type="button" class="um-quiet" data-um="decline" data-id="${escape(invite.id)}" data-business="${escape(invite.business_id)}">Decline</button></div></div>`).join('')}</div></section>`;
 }
-function roleLabel(role){return overview?.roles.find(option=>option.value===role)?.label||role;}
+function roleLabel(role){return overview?.roles.find(option=>option.value===role)?.label||({staff:'Staff (legacy)',member:'Member (legacy)'}[role])||role;}
 function tools(){
  const current=overview?.businesses.find(b=>b.id===business),tool=current?.tools.clothing;
  if(!tool?.available)return '';
@@ -91,7 +91,11 @@ async function load(){
  try{const result=await api('members',{business});if(ticket!==request||!opened)return;detail=result;directory.set(business,result);render();reconcile();}
  catch(error){if(ticket===request){render();notice(error.message,true);}}
 }
-function roleOptions(value){return overview.roles.filter(r=>r.value!=='owner'||detail.role==='owner').map(r=>`<option value="${r.value}" ${r.value===value?'selected':''}>${escape(r.label)}</option>`).join('');}
+function roleOptions(value){
+ const options=overview.roles.filter(r=>r.value!=='owner'||detail.role==='owner');
+ const placeholder=options.some(r=>r.value===value)?'':'<option value="" disabled selected>Choose a business role</option>';
+ return placeholder+options.map(r=>`<option value="${r.value}" ${r.value===value?'selected':''}>${escape(r.label)}</option>`).join('');
+}
 function inviteForm(){
  editing=null;$('membersEditor').innerHTML=`<section class="um-panel"><h3>Invite into ${escape(detail.business.name)}</h3><form id="membersInviteForm" class="um-form">
  <label>Email<input name="email" type="email" autocomplete="email" required maxlength="320" placeholder="name@example.com"></label>
@@ -103,7 +107,7 @@ function editForm(id){
  editing=detail.members.find(member=>member.id===id);if(!editing?.canEdit)return;
  const accessOptions=levels.map((label,value)=>({label,value})).filter(option=>detail.role==='owner'||option.value<=detail.maxClothing||option.value===editing.clothing);
  $('membersEditor').innerHTML=`<section class="um-panel"><h3>Edit access · ${escape(editing.name)}</h3><p class="um-muted">${escape(detail.business.name)}</p>
- <form id="membersEditForm" class="um-form"><label>Business role<select name="role">${roleOptions(editing.role)}</select></label>
+ <form id="membersEditForm" class="um-form"><label>Business role<select name="role" required>${roleOptions(editing.role)}</select></label>
  ${detail.clothingAvailable?`<label>Clothing Inventory<select name="clothing">${accessOptions.map(option=>`<option value="${option.value}" ${option.value===editing.clothing?'selected':''}>${option.label}</option>`).join('')}</select></label>`:''}
  <p class="um-muted">Saved changes apply across this person's UiDs. Removing access takes effect on their next request.</p>
  <div class="um-actions"><button type="submit">Save access</button><button type="button" class="um-quiet" data-um="cancel-edit">Cancel</button>
