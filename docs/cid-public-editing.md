@@ -81,3 +81,7 @@ membership in Workwear Toronto only. It preserves stronger existing roles and al
 other memberships, honours an explicit editing denial, and audits the change.
 Missing or ambiguous identity/mapping checks cannot grant access. The migration
 is idempotent and tested against isolated PostgreSQL semantics.
+
+Signed-in users without a linked account or company profile-editing permission
+are redirected automatically from the editor URL to the matching public CiD.
+Authorized editors keep the editor; operational failures remain visible for retry.
