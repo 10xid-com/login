@@ -54,13 +54,18 @@ function inventoryCard(entry){
  <strong>${escape(entry.name)}</strong><span class="ui-inventory-access">${escape(levels[entry.level])}<span aria-hidden="true"> →</span></span></button>`;
 }
 function renderInventories(error=''){
+ const group=(personal)=>{
+  const entries=inventoryEntries.filter(entry=>entry.personal===personal);
+  const title=personal?'Personal inventories':'Shared inventories',id=personal?'personalInventoriesTitle':'sharedInventoriesTitle';
+  const description=personal?'Inventories you own, including those you share.':'Inventories other people have shared with you.';
+  const empty=error?'Your inventories could not be fully loaded.':personal?'You do not own any connected inventories yet.':'No inventories have been shared with you.';
+  return `<section class="um-panel" aria-labelledby="${id}"><div class="um-panel-head"><h3 id="${id}">${title}</h3>${inventoryLoading?'':`<span class="um-count">${entries.length}</span>`}</div>
+   <p class="um-muted">${description}</p>${inventoryLoading?'<p role="status">Loading your inventories…</p>':entries.length?`<div class="ui-inventory-grid">${entries.map(inventoryCard).join('')}</div>`:`<p class="um-muted">${empty}</p>`}</section>`;
+ };
  inventories.innerHTML=`<div class="um-top"><button type="button" data-inventories="home">← Control Room</button><button type="button" data-inventories="refresh">Refresh</button></div>
  <div class="um-title"><div><h2>Inventory</h2><p>Choose an inventory to open.</p></div></div>
  ${error?`<div class="um-notice um-error" role="alert">${escape(error)} <button type="button" data-inventories="refresh">Try again</button></div>`:''}
- <section class="um-panel" aria-labelledby="personalInventoriesTitle"><div class="um-panel-head"><h3 id="personalInventoriesTitle">Personal inventories</h3><span class="um-count">0</span></div>
- <p class="um-muted">No personal inventories connected to your UiD.</p></section>
- <section class="um-panel" aria-labelledby="sharedInventoriesTitle"><div class="um-panel-head"><h3 id="sharedInventoriesTitle">Shared inventories</h3>${inventoryLoading?'':`<span class="um-count">${inventoryEntries.length}</span>`}</div>
- ${inventoryLoading?'<p role="status">Loading your shared inventories…</p>':inventoryEntries.length?`<div class="ui-inventory-grid">${inventoryEntries.map(inventoryCard).join('')}</div>`:error?'<p class="um-muted">Your inventory list could not be fully loaded.</p>':'<p class="um-muted">No shared inventories are available to your UiD.</p>'}</section>`;
+ ${group(true)}${group(false)}`;
 }
 async function generalInventories(){
  if(!root.InventoryUI?.openForBusiness)return [];
@@ -80,9 +85,11 @@ async function openInventories(){
  if(membersResult.status==='fulfilled')inventoryEntries=membersResult.value.businesses
   .filter(item=>item.tools?.clothing?.available&&item.tools.clothing.level>0)
   .map(item=>({key:'clothing:'+item.id,id:item.id,name:item.name,kind:'clothing',level:item.tools.clothing.level}));
- else errors.push('Shared Clothing inventories could not be loaded.');
- if(generalResult.status==='fulfilled')inventoryEntries.push(...generalResult.value);
+ else errors.push('Inventory ownership and access could not be loaded.');
+ if(generalResult.status==='fulfilled'){if(membersResult.status==='fulfilled')inventoryEntries.push(...generalResult.value);}
  else errors.push(generalResult.reason.message||'Some inventories could not be loaded.');
+ if(membersResult.status==='fulfilled')inventoryEntries=inventoryEntries.map(entry=>({...entry,
+  personal:membersResult.value.businesses.find(item=>item.id===entry.id)?.inventoryOwnership?.[entry.kind]===true}));
  inventoryEntries.sort((a,b)=>a.name.localeCompare(b.name)||a.kind.localeCompare(b.kind));inventoryLoading=false;renderInventories(errors.join(' '));
 }
 inventories.addEventListener('click',async event=>{

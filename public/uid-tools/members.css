@@ -41,7 +41,7 @@ body.members-open main>footer{display:none}
 .um-tool{flex-wrap:wrap}
 @media(max-width:600px){#membersStage{padding-top:2px}.um-panel{padding:17px}.um-title{gap:16px}.um-title label{width:100%}.um-row{gap:13px}.um-row>.um-actions{flex-basis:100%}.um-top{margin-bottom:14px}}
 
-/* One inventory chooser across UiDs. Business inventories stay separate from private inventories. */
+/* One chooser across UiDs: owned inventories are Personal, received inventories are Shared. */
 body.inventory-directory-open main>.heading,body.inventory-directory-open main>.grid,body.inventory-directory-open main>.legend,body.inventory-directory-open main>footer,body.inventory-directory-open #taskStage,body.inventory-directory-open #deskStage,body.inventory-directory-open #vendorStage,body.inventory-directory-open #inventoryStage,body.inventory-directory-open #clothingStage,body.inventory-directory-open #membersStage,body.inventory-directory-open #uidMenuStage,body.inventory-directory-open #postStage{display:none!important}
 #inventoriesStage[hidden]{display:none!important}
 #inventoriesStage{max-width:1100px;margin:0 auto;padding:8px 0 24px;color:#edf2f5;min-width:0}
