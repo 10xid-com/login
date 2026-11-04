@@ -203,12 +203,13 @@ export async function sendInvitation(input: {
   const { Resend } = await import("resend");
   const resend = new Resend(apiKey);
 
-  await resend.emails.send({
+  const { error } = await resend.emails.send({
     from: process.env.MAIL_FROM ?? "10XiD <no-reply@10xid.com>",
     to: input.to,
     subject: `You have been invited to the 10XiD portal`,
     text: body,
   });
+  if (error) throw new Error(`Invitation delivery was refused: ${error.name}`);
 }
 
 /**

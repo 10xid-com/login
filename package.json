@@ -19,7 +19,8 @@
     "test:e2e": "playwright test",
     "db:migrate:prod": "node scripts/migrate.mjs",
     "db:certify-copy": "node scripts/certify-copy.mjs",
-    "identity:bindings": "node scripts/identity-bindings.mjs"
+    "identity:bindings": "node scripts/identity-bindings.mjs",
+    "test:members": "vitest run --config vitest.members.config.mts"
   },
   "dependencies": {
     "@better-auth/utils": "0.4.2",
@@ -35,6 +36,7 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.15",
     "@playwright/test": "1.63.0",
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "22.20.3",
