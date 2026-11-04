@@ -59,13 +59,8 @@ function received(){
  <button type="button" class="um-quiet" data-um="decline" data-id="${escape(invite.id)}" data-business="${escape(invite.business_id)}">Decline</button></div></div>`).join('')}</div></section>`;
 }
 function roleLabel(role){return overview?.roles.find(option=>option.value===role)?.label||({staff:'Staff (legacy)',member:'Member (legacy)'}[role])||role;}
-function tools(){
- const current=overview?.businesses.find(b=>b.id===business),tool=current?.tools.clothing;
- if(!tool?.available)return '';
- return `<section class="um-panel um-tool"><div><h3>Clothing Inventory</h3><p>${escape(levels[tool.level])}</p></div>${tool.level?'<button type="button" data-um="clothing">Open Clothing Inventory →</button>':'<span class="um-muted">Ask a business owner for access.</span>'}</section>`;
-}
 function render(){
- stage.innerHTML=header()+received()+tools();
+ stage.innerHTML=header()+received();
  if(!business){stage.insertAdjacentHTML('beforeend','<section class="um-panel"><h3>Your business Channels</h3><p>No business memberships are available. Accepted invitations will appear here.</p></section>');return;}
  if(!detail){stage.insertAdjacentHTML('beforeend','<section class="um-panel"><p>Loading members…</p></section>');return;}
  stage.insertAdjacentHTML('beforeend',`<section class="um-panel"><div class="um-panel-head"><div><h3>${escape(detail.business.name)}</h3>
@@ -134,7 +129,6 @@ stage.addEventListener('click',event=>{
  if(action==='home')return root.showHome?.();if(action==='refresh')return run(async()=>{await refreshOverview();await load();});
  if(action==='invite')return inviteForm();if(action==='edit')return editForm(button.dataset.id);
  if(action==='cancel-edit'){editing=null;$('membersEditor').replaceChildren();return;}
- if(action==='clothing')return run(()=>openClothing(business));
  if(action==='accept'||action==='decline')return run(async()=>{await api(action,{business:button.dataset.business,invitationId:button.dataset.id});
   business=action==='accept'?button.dataset.business:business;await changed(action==='accept'?'Invitation accepted. The business Channel is now available.':'Invitation declined.');});
  if(action==='revoke')return run(async()=>{await api('revoke',{business,invitationId:button.dataset.id});await changed('Invitation withdrawn.');});
