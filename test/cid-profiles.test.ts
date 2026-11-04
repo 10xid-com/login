@@ -51,7 +51,7 @@ describe('public CiD data and member-only editing',()=>{
   await pg.exec('reset role');
   const before=await pg.query('select organization_id,user_id,role from memberships order by organization_id,user_id');
   await pg.exec("delete from cid_public_profiles;");
-  const seed=(await readFile(new URL('../drizzle/0059_cid_public_profiles.sql',import.meta.url),'utf8')).split('--> statement-breakpoint').at(-1)!;
+  const seed=(await readFile(new URL('../drizzle/0059_cid_public_profiles.sql',import.meta.url),'utf8')).split('--> statement-breakpoint').find(part=>part.includes('DECLARE r record'))!;
   await pg.exec(seed);await pg.exec(seed);
   const mapped=await pg.query('select slug,organization_id from cid_public_profiles order by slug');
   expect(mapped.rows).toEqual([{slug:'brandingcentres',organization_id:A},{slug:'workweartoronto',organization_id:B}]);

@@ -78,6 +78,19 @@ export const GROUPS = [
 export type Group = (typeof GROUPS)[number];
 
 export const PAGES: PageRecord[] = [
+  { id: "cid.public-profile", path: "/api/cid/[slug]", name: "Public company profile",
+    purpose: "Read only the company's explicitly published profile and Action layout, without a sign-in.",
+    audience: "public", kind: "machinery", file: "app/api/cid/[slug]/route.ts", methods: ["GET"], group: "Machinery" },
+  { id: "cid.edit-profile", path: "/auth/cid/[slug]", name: "Company profile editor",
+    purpose: "Assigned company members with editing authority can publish the public profile and Action layout.",
+    audience: "member", kind: "page", file: "app/auth/cid/[slug]/page.tsx", group: "The work" },
+  { id: "uid.business-members", path: "/api/uid/business", name: "UiD business membership API",
+    purpose: "Authenticated UiD servers manage the signed-in account's business memberships and authorized tool access.",
+    audience: "public", kind: "machinery", file: "app/api/uid/business/route.ts", methods: ["POST"], group: "Machinery" },
+  { id: "uid.tool-assets", path: "/api/uid/assets", name: "UiD tool assets",
+    purpose: "Shared membership interface code is public; private inventory code requires an authorized UiD server.",
+    audience: "public", kind: "machinery", file: "app/api/uid/assets/route.ts", methods: ["GET"], group: "Machinery" },
+
   /* -------------------------------------------------------------- */
   /* Getting in                                                      */
   /* -------------------------------------------------------------- */

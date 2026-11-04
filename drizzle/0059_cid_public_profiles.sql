@@ -11,8 +11,6 @@ CREATE TABLE cid_public_profiles (
 --> statement-breakpoint
 ALTER TABLE cid_public_profiles ENABLE ROW LEVEL SECURITY;
 --> statement-breakpoint
-ALTER TABLE cid_public_profiles FORCE ROW LEVEL SECURITY;
---> statement-breakpoint
 REVOKE ALL ON cid_public_profiles FROM PUBLIC, portal_app, portal_auth;
 --> statement-breakpoint
 GRANT SELECT ON cid_public_profiles TO portal_app;
@@ -93,3 +91,6 @@ BEGIN
   END LOOP;
 END
 $$;
+
+--> statement-breakpoint
+ALTER TABLE cid_public_profiles FORCE ROW LEVEL SECURITY;
