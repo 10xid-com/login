@@ -15,9 +15,10 @@ export default async function CidEditor({params,searchParams}:{params:Promise<{s
   if(!session)redirect(`/auth/sign-in?next=${encodeURIComponent(back)}`);
   if(!session.mfaVerifiedAt)redirect(`/auth/mfa?next=${encodeURIComponent(back)}`);
   const account=await userByAuthUserId(session.user.id);
-  if(!account)redirect(`/auth/access?next=${encodeURIComponent(back)}`);
+  if(!account)redirect(cidUrl(slug));
   let data;
   try{data=await editableCid(slug,account.id);}catch(error){
+    if(error instanceof MemberError && error.status===403)redirect(cidUrl(slug));
     return <AuthCard title={CID_COMPANIES[slug].name} intro="Company profile"><p role="alert">{error instanceof MemberError?error.message:'The company profile is temporarily unavailable.'}</p><p><a href={cidUrl(slug)}>View public CiD →</a></p><p><a href="/auth/account">Account settings</a></p></AuthCard>;
   }
   const query=await searchParams;
