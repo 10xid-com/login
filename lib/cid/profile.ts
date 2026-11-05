@@ -14,20 +14,21 @@ export function cidUrl(slug:CidSlug){return `https://cid-${slug}.10xid.com/`;}
 export const PROFILE_LIMITS = {displayName:100,description:500,website:500,email:200,phone:60,address:500,
   instagram:500,facebook:500,linkedin:500,ownershipLabel:150,logoUrl:500,mapsUrl:500} as const;
 export const CID_ACTIONS = [
-  {id:'overview',label:'Overview',icon:'◫'}, {id:'profile',label:'Profile',icon:'▣'},
+  {id:'profile',label:'Profile',icon:'▣'},
   {id:'links',label:'Web links',icon:'↗'}, {id:'website',label:'Website',icon:'◎'},
   {id:'email',label:'Email',icon:'✉'}, {id:'phone',label:'Call',icon:'☎'},
   {id:'instagram',label:'Instagram',icon:'▧'}, {id:'facebook',label:'Facebook',icon:'f'},
   {id:'linkedin',label:'LinkedIn',icon:'in'}, {id:'address',label:'Location',icon:'⌖'},
   {id:'manage',label:'Manage CiD',icon:'✎'},
 ] as const;
-export const DEFAULT_CID_ACTIONS = ['overview','profile','links','website','email','phone'];
+export const DEFAULT_CID_ACTIONS = ['profile','links','website','email','phone','address'];
 export function validateActions(input:unknown):string[]{
   if(input===undefined)return DEFAULT_CID_ACTIONS.slice();
   if(!Array.isArray(input)||input.length!==6||new Set(input).size!==6||
-    !input.every(id=>typeof id==='string'&&CID_ACTIONS.some(action=>action.id===id)))
+    !input.every(id=>id==='overview'||CID_ACTIONS.some(action=>action.id===id)))
     throw Error('Choose six different Action buttons.');
-  return input.slice();
+  const actions = input.map(id => id === 'overview' ? 'profile' : id);
+  return [...new Set([...actions, 'address', ...DEFAULT_CID_ACTIONS])].slice(0, 6);
 }
 export type CidProfile = Record<keyof typeof PROFILE_LIMITS,string> & {showOwnership:boolean;actions:string[]};
 export function emptyProfile(slug:CidSlug):CidProfile {

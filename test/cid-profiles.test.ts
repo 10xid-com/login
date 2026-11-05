@@ -99,3 +99,10 @@ describe('public CiD data and member-only editing',()=>{
   expect(mayEditCid('owner',[{capability:'cid.profile.write',deny:true}])).toBe(false);
  });
 });
+
+it('merges legacy Overview and Profile without losing other action choices', () => {
+  expect(validateActions(['overview','profile','phone','address','instagram','facebook']))
+    .toEqual(['profile','phone','address','instagram','facebook','links']);
+  expect(validateActions(['phone','overview','links','website','email','address']))
+    .toEqual(['phone','profile','links','website','email','address']);
+});
