@@ -28,3 +28,16 @@ test('cross-origin changes and unknown paths fail before upstream traffic',async
  f.origin.mockRejectedValue(Error('Wrong origin'));expect((await companyBlogs(req('PUT'),'workweartoronto','api/state/drafts')).status).toBe(403);
  expect((await companyBlogs(req(),'workweartoronto','../../private')).status).toBe(404);expect(f.fetch).not.toHaveBeenCalled();
 });
+
+test('Stage workspace only permits its own CiD to frame it', async()=>{
+ const request=new Request('https://login.10xid.com/auth/cid/workweartoronto/blogs?stage=1');
+ f.fetch.mockResolvedValueOnce(new Response('<title>Blog Posts</title>',{headers:{'content-type':'text/html'}}));
+ const embedded=await companyBlogs(request,'workweartoronto','workspace',true);
+ expect(embedded.headers.get('content-security-policy')).toBe("frame-ancestors https://cid-workweartoronto.10xid.com; object-src 'none'; base-uri 'none'");
+ expect(await embedded.text()).toContain('.cid-header > a');
+ expect((await companyBlogs(req(),'workweartoronto','workspace',true)).headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+ f.session.mockResolvedValue(null);
+ const expired=await companyBlogs(request,'workweartoronto','workspace',true);
+ expect(expired.status).toBe(401);
+ expect(expired.headers.get('location')).toBeNull();
+});

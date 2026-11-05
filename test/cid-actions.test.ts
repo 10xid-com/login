@@ -39,3 +39,11 @@ describe('CiD sign-in, CSRF and server action boundaries',()=>{
   expect(failed.status).toBe(503);expect(await failed.text()).not.toContain('secret');
  });
 });
+
+it('publishes back into the Stage editor and keeps an expired session in the frame',async()=>{
+ const input=form();input.set('stage','1');
+ await expect(publishCid('rotary',input)).rejects.toThrow('/auth/cid/rotary?stage=1&saved=1');
+ f.session.mockResolvedValue(null);
+ await expect(publishCid('rotary',input)).rejects.toThrow('/auth/cid/rotary?stage=1&error=denied');
+ expect(f.save).toHaveBeenCalledTimes(1);
+});
