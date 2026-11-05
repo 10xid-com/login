@@ -10,16 +10,20 @@ export async function publishCid(slug:string,form:FormData){
   if(!isCidSlug(slug))throw new Error('Company not found.');
   await assertLoginOrigin();
   const back=`/auth/cid/${slug}`;
+  const inStage=form.get('stage')==='1';
+  const query=inStage?'?stage=1&':'?';
   const session=await getLoginSession();
+  if(inStage&&!session?.mfaVerifiedAt)redirect(`${back}${query}error=denied`);
   if(!session)redirect(`/auth/sign-in?next=${encodeURIComponent(back)}`);
   if(!session.mfaVerifiedAt)redirect(`/auth/mfa?next=${encodeURIComponent(back)}`);
   const account=await userByAuthUserId(session.user.id);
+  if(inStage&&!account)redirect(`${back}${query}error=denied`);
   if(!account)redirect(`/auth/access?next=${encodeURIComponent(back)}`);
   const input={...Object.fromEntries(Object.keys(PROFILE_LIMITS).map(key=>[key,form.get(key)])),actions:form.getAll('actions'),showOwnership:form.get('showOwnership')==='on'};
   try{await saveCid(slug,account.id,input,Number(form.get('version')));}
   catch(error){
     const reason=error instanceof MemberError?(error.status===409?'conflict':error.status===422?'invalid':'denied'):'unavailable';
-    redirect(`${back}?error=${reason}`);
+    redirect(`${back}${query}error=${reason}`);
   }
-  redirect(`${back}?saved=1`);
+  redirect(`${back}${query}saved=1`);
 }

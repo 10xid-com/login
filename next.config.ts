@@ -1,6 +1,18 @@
 import type { NextConfig } from "next";
+import { CID_COMPANIES, type CidSlug } from "./lib/cid/profile";
+import { cidStagePolicy } from "./lib/cid/stage";
 
 const nextConfig: NextConfig = {
+  async headers() {
+    return (Object.keys(CID_COMPANIES) as CidSlug[]).map(slug => ({
+      source: `/auth/cid/${slug}`,
+      has: [{ type: "query", key: "stage", value: "1" }],
+      headers: [
+        { key: "Content-Security-Policy", value: cidStagePolicy(slug) },
+        { key: "Cache-Control", value: "private, no-store" },
+      ],
+    }));
+  },
   /**
    * The local hostnames from the README, which development and the browser
    * tests run against.
