@@ -44,6 +44,7 @@ export default async function UidDeniedPage({
 /** "uid-bypaolo.10xid.com" → "the bypaolo UiD page", in plain words. */
 function siteName(next: string): string {
   const host = new URLSearchParams(next.split("?")[1] ?? "").get("host") ?? "";
+  if (next.startsWith("/auth/website-admin/authorize?")) return "this website’s admin area";
   const label = host.replace(/\.10xid\.com$/i, "").replace(/^uid-/i, "");
   return label ? `the ${label} UiD page` : "this page";
 }

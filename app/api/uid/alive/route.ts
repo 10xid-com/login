@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { authSessionLive } from "@/lib/db/identity";
 import { isUidSiteCaller, mayOpenUid } from "@/lib/auth/uid-sites";
 import { sitePasswordLive } from "@/lib/auth/site-password";
+import { websiteAdminLive, websiteAdminStampPrefix } from "@/lib/auth/website-admin";
 
 /**
  * Is a UiD page's sign-in still good? Its server asks every few minutes
@@ -26,6 +27,10 @@ export async function POST(request: NextRequest) {
   const session = typeof body?.session === "string" ? body.session : "";
   const stamp = typeof body?.stamp === "string" ? body.stamp : "";
   const email = typeof body?.email === "string" ? body.email : "";
+  if (stamp.startsWith(websiteAdminStampPrefix)) {
+    const alive = await websiteAdminLive(host, email, stamp);
+    return NextResponse.json({ alive }, { headers: NO_STORE });
+  }
   if (stamp) {
     const alive = mayOpenUid(host, email) && (await sitePasswordLive(host, email, stamp));
     return NextResponse.json({ alive }, { headers: NO_STORE });
