@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { Client } from "pg";
+import { restoreLegacyIdentityNames } from "./support/legacy-identity-tables";
 
 /**
  * Inventory (0048), proved against the RESTRICTED role.
@@ -195,6 +196,7 @@ describe("A12 migration", () => {
   test("0048 is re-runnable: applying it twice changes nothing", async () => {
     const sql = await readFile("drizzle/0048_inventory.sql", "utf8");
     await inRollback(async () => {
+      await restoreLegacyIdentityNames(owner);
       const before = await one(`select count(*)::int as n from inventory_units`);
       await owner.query(sql);
       await owner.query(sql);
