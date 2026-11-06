@@ -109,8 +109,14 @@ inventories.addEventListener('click',async event=>{
 });
 // Paolo's existing menu opens independently of showHome; close the chooser before that menu renders.
 $('tenxButton')?.addEventListener('click',()=>{if(!inventories.hidden)root.showHome?.();},true);
+// The Login origin is written in by /api/uid/assets (the placeholder is replaced there). Unreplaced or odd values hide the link.
+const LOGIN_ORIGIN='%%LOGIN_ORIGIN%%';
+function myWorkLink(){
+ if(!/^https:\/\/[a-z0-9.-]+\.10xid\.com$/.test(LOGIN_ORIGIN))return '';
+ return `<a class="um-my-work" href="${LOGIN_ORIGIN}/auth/pid/my-work" rel="noopener">My Work</a>`;
+}
 function header(){
- return `<div class="um-top"><button type="button" data-um="home">← Control Room</button><button type="button" data-um="refresh">Refresh</button></div>
+ return `<div class="um-top"><button type="button" data-um="home">← Control Room</button>${myWorkLink()}<button type="button" data-um="refresh">Refresh</button></div>
  <div class="um-title"><div><span class="um-kicker">BUSINESS ACCESS</span><h2>Members</h2></div>
  <label>CiD<select id="membersBusiness" ${busy?'disabled':''}><option value="">Choose a CiD</option>${overview?.businesses.length?`<option value="${ALL_CIDS}" ${business===ALL_CIDS?'selected':''}>All CiDs</option>`:''}${(overview?.businesses||[]).map(b=>`<option value="${escape(b.id)}" ${b.id===business?'selected':''}>${escape(b.name)}</option>`).join('')}</select></label></div>
  <div id="membersNotice" class="um-notice" role="status" hidden></div>`;

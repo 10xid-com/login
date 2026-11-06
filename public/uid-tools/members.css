@@ -16,6 +16,7 @@ body.members-open main>footer{display:none}
 .um-top,.um-title,.um-panel-head,.um-row,.um-tool{display:flex;align-items:center;justify-content:space-between;gap:18px}
 .um-top{margin-bottom:22px}
 .um-top button{background:transparent!important;border-color:transparent!important;padding-left:0!important}
+.um-my-work{margin-left:auto;margin-right:12px;font-weight:600;text-decoration:underline;color:inherit}
 .um-title{align-items:end;margin-bottom:24px;flex-wrap:wrap}
 .um-kicker{font-size:10px;letter-spacing:.14em;color:#adbfcb}
 .um-title label{min-width:220px;max-width:100%;margin:0}

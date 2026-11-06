@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { loginOrigin } from '@/lib/auth/auth';
 import { isUidSiteCaller, uidSiteSecret, uidSites } from '@/lib/auth/uid-sites';
 
 export const runtime='nodejs';
@@ -24,7 +25,11 @@ export async function GET(request:Request){
       return new Response(upstream.body,{headers:{'content-type':type+'; charset=utf-8','cache-control':'private, max-age=60','x-content-type-options':'nosniff'}});
     }catch{return new Response('Tool interface is unavailable',{status:503});}
   }
-  try{return new Response(await readFile(join(process.cwd(),'public','uid-tools',file)),{
+  try{
+    const bytes=await readFile(join(process.cwd(),'public','uid-tools',file));
+    // The shared Members script links to My Work on this Login origin; only that placeholder is replaced.
+    const body:BodyInit=file==='members.js'?bytes.toString('utf8').replace('%%LOGIN_ORIGIN%%',loginOrigin()):new Uint8Array(bytes);
+    return new Response(body,{
     headers:{'content-type':file.endsWith('.css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8',
       'cache-control':'public, max-age=60','x-content-type-options':'nosniff'},
   });}catch{return new Response('Not found',{status:404});}
