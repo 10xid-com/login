@@ -40,3 +40,20 @@ refuses((e) => (e.NODE_ENV = "production"), /production/);
 refuses((e) => (e.PILOT_APP_PASSWORD = "short"), /APP_PASSWORD/);
 refuses((e) => (e.PILOT_AUTH_PASSWORD = e.PILOT_APP_PASSWORD), /differ/);
 refuses((e) => (e.PILOT_AUTH_PASSWORD = "Z".repeat(40)), /AUTH_PASSWORD/);
+
+// --- ACL hardening follow-up (staging only) ---
+import { LEGACY_DEFINER_PUBLIC_REVOKES } from "./pilot-staging-db-rehearsal.mjs";
+test("PUBLIC revoke list is exactly the seven named legacy definer functions", () => {
+  assert.deepEqual([...LEGACY_DEFINER_PUBLIC_REVOKES].sort(), [
+    "auth_sessions_purge_dead()",
+    "flow_enforce_separation_of_duty()",
+    "flow_inherit_task_org()",
+    "flow_pin_allowed_time()",
+    "flow_same_company(uuid,uuid)",
+    "flow_stamp_claim_window()",
+    "flow_task_chain(uuid)",
+  ]);
+});
+// --acl-only reuses checkGates() before any connection; these stay refused.
+refuses((e) => (e.RAILWAY_ENVIRONMENT_ID = "00000000-0000-0000-0000-000000000000"), /ENVIRONMENT_ID/);
+refuses((e) => (e.DATABASE_URL = e.DATABASE_URL.replace(HOST, "127.0.0.1")), /host/);

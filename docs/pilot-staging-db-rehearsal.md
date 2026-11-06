@@ -19,3 +19,15 @@ Success prints `PILOT_DB_REHEARSAL_OK`; exit code is non-zero otherwise. Secrets
 Not done: synthetic users/CiD fixtures. `npm run db:seed` writes fixed `.test` hosts/emails
 and is not loopback-guarded, so it was left out; add a dedicated synthetic seed later.
 `scripts/ci-db-guard.mjs` (loopback-only) is intentionally unchanged.
+
+## ACL hardening follow-up (staging only)
+
+`npm run pilot:db-acl-hardening` (`--acl-only`; same env and gates, no migrate, no password change).
+As `ci_owner` it runs only `REVOKE EXECUTE ... FROM PUBLIC` on: `flow_pin_allowed_time()`,
+`flow_stamp_claim_window()`, `flow_inherit_task_org()`, `flow_task_chain(uuid)`,
+`flow_same_company(uuid,uuid)`, `flow_enforce_separation_of_duty()`, `auth_sessions_purge_dead()`.
+All are SECURITY DEFINER trigger functions; triggers do not check EXECUTE and nested helpers run as
+owner. Explicit grants to named roles are never touched (compared before/after). Then it re-verifies.
+Expected policy: no PUBLIC EXECUTE on any SECURITY DEFINER function in `public`; `portal_app` may
+SELECT `public.role` / `public.memberships` (0061, derives CiD scope); `portal_auth` is denied both;
+`jobs` is RLS-isolated (0 rows unscoped). No production migration was added.

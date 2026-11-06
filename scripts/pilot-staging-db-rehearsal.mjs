@@ -64,6 +64,25 @@ const FORBIDDEN_EXACT = [
 ];
 const FORBIDDEN_PREFIX = ["BOOTSTRAP_", "PORTAL_", "SMTP_", "RESEND_", "STRIPE_"];
 
+/**
+ * Old SECURITY DEFINER functions that migrations 0015/0022/0037 left with the
+ * default PUBLIC EXECUTE. Each is only run by a trigger (firing a trigger does
+ * not check EXECUTE; the definer helpers nested in
+ * flow_enforce_separation_of_duty() run as the owner) and the app never calls
+ * them directly. auth_sessions_purge_dead() is fired solely by the AFTER INSERT
+ * trigger of the same name on auth_sessions; no direct call exists in lib/, app/
+ * or proxy.ts. Staging only: there is deliberately no production migration.
+ */
+export const LEGACY_DEFINER_PUBLIC_REVOKES = Object.freeze([
+  "flow_pin_allowed_time()",
+  "flow_stamp_claim_window()",
+  "flow_inherit_task_org()",
+  "flow_task_chain(uuid)",
+  "flow_same_company(uuid,uuid)",
+  "flow_enforce_separation_of_duty()",
+  "auth_sessions_purge_dead()",
+]);
+
 const HEX_PASSWORD = /^[0-9a-f]{32,128}$/;
 
 class GateError extends Error {}
@@ -125,13 +144,13 @@ export function checkGates(env = process.env) {
   return { host: url.hostname, port: EXPECTED.port, database: EXPECTED.database };
 }
 
-const results = [];
+export const results = [];
 function check(name, ok, detail = "") {
   results.push({ name, ok: Boolean(ok) });
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`);
 }
 
-async function withClient(config, fn) {
+export async function withClient(config, fn) {
   const c = new pg.Client({ ...config, connectionTimeoutMillis: 10_000, statement_timeout: 30_000 });
   await c.connect();
   try {
@@ -152,7 +171,37 @@ async function configureRole(owner, role, password) {
   await owner.query("SELECT set_config('pilot.pw', '', false)");
 }
 
-async function verifyOwnerSide(owner) {
+const explicitRoleGrants = async (owner, sig) =>
+  (await owner.query(
+    `select coalesce(string_agg(g.rolname || ':' || a.privilege_type || ':' || a.is_grantable, ',' order by g.rolname), '') s
+       from pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+       join pg_roles g on g.oid = a.grantee
+      where p.oid = $1::regprocedure and a.grantee <> 0 and a.grantee <> p.proowner`,
+    [sig],
+  )).rows[0].s;
+
+/**
+ * Narrow ONLY the named PUBLIC grants. Grants to named roles are never touched,
+ * so an explicit legitimate portal_app/portal_auth EXECUTE survives (compared
+ * before/after). Call only after checkGates(), as ci_owner, on the pilot DB.
+ */
+export async function hardenLegacyDefinerAcl(owner) {
+  for (const sig of LEGACY_DEFINER_PUBLIC_REVOKES) {
+    const { rows } = await owner.query(
+      "select p.prosecdef, pg_get_userbyid(p.proowner) o, n.nspname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where p.oid = to_regprocedure($1)",
+      [`public.${sig}`],
+    );
+    const ok = rows.length === 1 && rows[0].prosecdef && rows[0].o === EXPECTED.owner && rows[0].nspname === "public";
+    check(`${sig} exists, SECURITY DEFINER, owned by ${EXPECTED.owner}`, ok);
+    if (!ok) continue;
+    const before = await explicitRoleGrants(owner, `public.${sig}`);
+    await owner.query(`REVOKE EXECUTE ON FUNCTION public.${sig} FROM PUBLIC`);
+    const after = await explicitRoleGrants(owner, `public.${sig}`);
+    check(`${sig} PUBLIC EXECUTE revoked; explicit role grants preserved`, before === after, `roles=[${after}]`);
+  }
+}
+
+export async function verifyOwnerSide(owner) {
   const { rows: ident } = await owner.query(
     "select current_user u, current_database() d, version() v, (select rolsuper from pg_roles where rolname=current_user) su",
   );
@@ -260,7 +309,12 @@ async function verifyOwnerSide(owner) {
     const got = await exec(role, fn).catch(() => undefined);
     check(`${role} EXECUTE ${fn} = ${want}`, got === want);
   }
-  for (const fn of ["auth_session_touch(text)", "operator_open_bindings()", "signin_link_start(text,text,text,text)"]) {
+  for (const fn of [
+    "auth_session_touch(text)",
+    "operator_open_bindings()",
+    "signin_link_start(text,text,text,text)",
+    ...LEGACY_DEFINER_PUBLIC_REVOKES,
+  ]) {
     const got = await publicExec(fn).catch(() => undefined);
     check(`PUBLIC cannot EXECUTE ${fn}`, got === false);
   }
@@ -273,7 +327,7 @@ async function verifyOwnerSide(owner) {
   check("no SECURITY DEFINER function in public is PUBLIC-executable", openDefiners.length === 0, openDefiners.map((r) => r.f).join("; "));
 }
 
-async function verifyRoleConnection(base, user, password, otherTables) {
+export async function verifyRoleConnection(base, user, password) {
   await withClient({ host: base.host, port: Number(base.port), database: base.database, user, password }, async (c) => {
     const { rows } = await c.query(
       "select current_user u, r.rolsuper s, r.rolbypassrls b, (select count(*)::int from pg_tables where tableowner=current_user and schemaname='public') owns from pg_roles r where r.rolname=current_user",
@@ -286,18 +340,34 @@ async function verifyRoleConnection(base, user, password, otherTables) {
       const denied = await c.query(sql).then(() => false, (e) => e.code === "42501");
       check(`${user} denied: ${sql}`, denied);
     }
-    for (const t of otherTables) {
-      // An unscoped read must fail on permission or come back empty, never leak rows.
-      const r = await c.query(`select count(*)::int n from ${t}`).then((x) => x.rows[0].n, () => 0);
-      check(`${user} unscoped read of ${t} returns 0 rows`, r === 0);
+    // jobs is RLS-isolated: an UNSCOPED read must return zero rows (or be denied
+    // outright with 42501) for both roles. Any other error is a failure.
+    const jobs = await c.query("select count(*)::int n from jobs").then(
+      (x) => x.rows[0].n === 0,
+      (e) => e.code === "42501",
+    );
+    check(`${user} unscoped read of jobs returns 0 rows or is denied`, jobs);
+    // memberships is a security-invoker view over public.role. Migration 0061
+    // explicitly grants portal_app SELECT on both (to derive CiD scope), so that
+    // read must be ALLOWED (row count is whatever RLS yields; never asserted
+    // empty). portal_auth has no grant on either and must be denied.
+    for (const [label, rel] of [["memberships", "public.memberships"], ["role", 'public."role"']]) {
+      const r = await c.query(`select count(*)::int n from ${rel}`).then(
+        () => "allowed",
+        (e) => (e.code === "42501" ? "denied" : `error:${e.code}`),
+      );
+      const want = user === "portal_app" ? "allowed" : "denied";
+      check(`${user} unscoped SELECT on ${label} is ${want}`, r === want, r === want ? "" : r);
     }
   });
 }
 
 async function main() {
-  const base = checkGates(); // BEFORE any DB access
+  const base = checkGates(); // BEFORE any DB access (also guards --acl-only)
+  const aclOnly = process.argv.includes("--acl-only");
   console.log(`gates passed: host=${base.host} db=${base.database} env=${EXPECTED.railwayEnvironmentId}`);
 
+  if (!aclOnly) {
   // Child gets only what migrate.mjs needs. No PORTAL_*/BOOTSTRAP_* by construction.
   const migrate = spawnSync("npm", ["run", "db:migrate:prod"], {
     stdio: "inherit",
@@ -312,11 +382,20 @@ async function main() {
     await configureRole(owner, "portal_app", process.env.PILOT_APP_PASSWORD);
     await configureRole(owner, "portal_auth", process.env.PILOT_AUTH_PASSWORD);
     check("portal_app and portal_auth configured with LOGIN", true);
+    await hardenLegacyDefinerAcl(owner);
     await verifyOwnerSide(owner);
   });
+  } else {
+    // Follow-up: schema already migrated and roles already have LOGIN. Only the
+    // named PUBLIC grants are narrowed, then everything is re-verified.
+    await withClient({ connectionString: process.env.DATABASE_URL }, async (owner) => {
+      await hardenLegacyDefinerAcl(owner);
+      await verifyOwnerSide(owner);
+    });
+  }
 
-  await verifyRoleConnection(base, "portal_app", process.env.PILOT_APP_PASSWORD, ["jobs", "memberships"]);
-  await verifyRoleConnection(base, "portal_auth", process.env.PILOT_AUTH_PASSWORD, ["jobs", "memberships"]);
+  await verifyRoleConnection(base, "portal_app", process.env.PILOT_APP_PASSWORD);
+  await verifyRoleConnection(base, "portal_auth", process.env.PILOT_AUTH_PASSWORD);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
