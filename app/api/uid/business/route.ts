@@ -4,6 +4,7 @@ import { clothingProxy } from "@/lib/uid/clothing-proxy";
 import { sendInvitation } from "@/lib/auth/mailer";
 import { businessId, uidOverview, uidMembers, uidChangeMember, uidInvite, uidRevokeInvite, uidAcceptInvite, uidClothingAccess } from "@/lib/db/uid-members";
 
+const RANA_ACCOUNTS=['bbb11aae-61de-4bdf-ae62-6be722ba9ab4','0145e895-4ea1-4d73-b692-e2b07c883875'];
 export const runtime='nodejs';
 const HEADERS={'cache-control':'no-store','x-content-type-options':'nosniff'};
 const json=(value:unknown,status=200)=>Response.json(value,{status,headers:HEADERS});
@@ -22,7 +23,11 @@ export async function POST(request:Request){
     if(!input||typeof input!=='object'||Array.isArray(input))throw new MemberError('Invalid request.',400);
     const actor=await authenticateUid(request.headers.get('authorization'),input);
     const action=input.action;
-    if(action==='overview')return json(await uidOverview(actor));
+    if(action==='overview'){
+      const linkedAccountId=input.host==='uid-rana.10xid.com'&&RANA_ACCOUNTS.includes(actor.userId)
+        ?RANA_ACCOUNTS.find(id=>id!==actor.userId):undefined;
+      return json(await uidOverview(actor,linkedAccountId));
+    }
     if(action==='clothing-authorize'){
       const access=await uidClothingAccess(actor,typeof input.business==='string'?input.business:undefined);
       if(!['GET','POST'].includes(String(input.method))||input.path!=='/api/clothing/photo-reader'||
@@ -38,8 +43,8 @@ export async function POST(request:Request){
       try{phones=JSON.parse(process.env.CONTACT_DIRECTORY_PHONES||'{}')||{};}catch{/* Optional contact data. */}
       const members=roster.members.map(member=>{
         const phone=phones[member.id];
-        const primary=member.id==='bbb11aae-61de-4bdf-ae62-6be722ba9ab4';
-        const rana=primary||member.id==='0145e895-4ea1-4d73-b692-e2b07c883875';
+        const primary=member.id===RANA_ACCOUNTS[0];
+        const rana=RANA_ACCOUNTS.includes(member.id);
         return {...member,...(typeof phone==='string'&&/^\d{3}-\d{3}-\d{4}$/.test(phone)?{contactPhone:phone}:{}),
           ...(rana?{contactGroup:{key:'rana',name:'Rana',primary}}:{})};
       });
