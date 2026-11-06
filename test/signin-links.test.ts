@@ -4,8 +4,11 @@ import {PGlite} from '@electric-sql/pglite';
 import {drizzle} from 'drizzle-orm/pglite';
 import {sql} from 'drizzle-orm';
 
-// Isolated in-memory PostgreSQL. Runs migration 0062 itself; no production connection.
+// Isolated in-memory PostgreSQL. Runs migrations 0062-0064 itself; no production connection.
 const state=vi.hoisted(()=>({database:null as ReturnType<typeof drizzle>|null}));
+vi.mock('@/lib/db/auth-connection',()=>({
+ authDb:()=>({execute:async(query:unknown)=>{await state.database!.execute(sql`set role portal_auth`);try{return await state.database!.execute(query as Parameters<ReturnType<typeof drizzle>['execute']>[0]);}finally{await state.database!.execute(sql`set role portal_app`);}}}),
+}));
 vi.mock('@/lib/db/connection',()=>({
  db:{execute:(query:unknown)=>state.database!.execute(query as Parameters<ReturnType<typeof drizzle>['execute']>[0])},
  inOwnerTransaction:(organizationId:string,userId:string,fn:(tx:unknown)=>unknown)=>state.database!.transaction(async tx=>{
@@ -15,7 +18,8 @@ vi.mock('@/lib/db/connection',()=>({
   await tx.execute(sql`select set_config('app.authenticating','on',true)`);return fn(tx);
  }),
 }));
-import {startSigninLink,completeSigninLink,revokeSigninLink,linksFor,pairHasLinkHistory,hashLinkCode,newLinkCode} from '@/lib/db/signin-links';
+import * as lib from '@/lib/db/signin-links';
+import {linksFor} from '@/lib/db/signin-links';
 import {uidOverview,uidMembers,uidChangeMember,verifiedDiscovery,type UidActor} from '@/lib/db/uid-members';
 import {legacyLinkedAccount,LEGACY_RANA_ACCOUNTS} from '@/lib/uid/legacy-rana-compat';
 
@@ -30,9 +34,16 @@ async function session(sid:string,authId:string,minutesAgo:number|null=0,expires
    on conflict(id) do update set mfa_verified_at=excluded.mfa_verified_at,expires_at=excluded.expires_at`,
   minutesAgo===null?[sid,authId,String(expiresInMin)]:[sid,authId,String(expiresInMin),String(minutesAgo)]));
 }
+// The server action attests the fresh TOTP right before each mutation; these helpers do the same.
+const {hashLinkCode,newLinkCode,pairHasLinkHistory}=lib;
+const start=async(sid:string,side:'initiator'|'redeemer',to='two@example.com')=>{await lib.attestFreshTotp(sid,'start');return lib.startSigninLink(sid,side,to);};
+const complete=async(sid:string,code:string)=>{await lib.attestFreshTotp(sid,'complete');return lib.completeSigninLink(sid,code);};
+const revoke=async(sid:string,linkId:string)=>{await lib.attestFreshTotp(sid,'revoke');return lib.revokeSigninLink(sid,linkId);};
+const emailOf=(sid:string)=>su(async()=>String(((await pg.query('select e.email from auth_sessions s join users u on u.auth_user_id=s.user_id join user_emails e on e.user_id=u.id where s.id=$1',[sid])).rows[0] as {email?:string}|undefined)?.email));
+async function asAuth<T>(fn:()=>Promise<T>):Promise<T>{await pg.exec('reset role;set role portal_auth');try{return await fn();}finally{await pg.exec('reset role;set role portal_app');}}
 async function link(a='s1',b='s2'){
- const started=await startSigninLink(a,'initiator');if(!started.ok)throw new Error(started.reason);
- return {code:started.code,result:await completeSigninLink(b,started.code)};
+ const started=await start(a,'initiator',await emailOf(b));if(!started.ok)throw new Error(started.reason);
+ return {code:started.code,result:await complete(b,started.code)};
 }
 beforeAll(async()=>{
  pg=new PGlite();await pg.waitReady;state.database=drizzle(pg);
@@ -54,14 +65,16 @@ beforeAll(async()=>{
  `);
  await pg.exec(await readFile(new URL('../drizzle/0062_verified_signin_links.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../drizzle/0063_signin_link_pair_history.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../drizzle/0064_signin_link_hardening.sql',import.meta.url),'utf8'));
 },60000);
 beforeEach(async()=>{
- await pg.exec(`reset role;truncate signin_link_audit,signin_links,signin_link_challenges,signin_link_failures,auth_sessions,identity_bindings,uid_inventory_owners,permissions,invitations,memberships,user_emails,users,organizations cascade;`);
+ await pg.exec(`reset role;truncate signin_link_attestations,signin_link_audit,signin_links,signin_link_challenges,signin_link_failures,auth_sessions,identity_bindings,uid_inventory_owners,permissions,invitations,memberships,user_emails,users,organizations cascade;`);
  await pg.query(`insert into organizations(id,name,slug) values($1,'Alpha','alpha'),($2,'Beta','beta')`,[ORG1,ORG2]);
  await pg.query(`insert into users(id,email,full_name,auth_user_id,is_service,deleted_at) values
   ($1,'one@example.com','One','a1',false,null),($2,'two@example.com','Two','a2',false,null),($3,'three@example.com','Three','a3',false,null),
   ($4,'svc@example.com','Svc','a4',true,null),($5,'gone@example.com','Gone','a5',false,now())`,[U1,U2,U3,SVC,GONE]);
  await pg.query(`insert into memberships(organization_id,user_id,role) values($1,$2,'owner'),($3,$4,'viewer')`,[ORG1,U1,ORG2,U2]);
+ await pg.query(`insert into user_emails(user_id,email) values($1,'one@example.com'),($2,'two@example.com'),($3,'three@example.com')`,[U1,U2,U3]);
  await pg.exec('set role portal_app');
  await session('s1','a1');await session('s2','a2');await session('s3','a3');
 });
@@ -74,84 +87,181 @@ describe('proof of both accounts',()=>{
   expect((await linksFor(U2)).map(l=>l.userId)).toEqual([U1]);
  });
  it('refuses a start or redeem from a session without a recent authenticator check',async()=>{
-  await session('old','a1',6);expect(await startSigninLink('old','initiator')).toEqual({ok:false,reason:'not_fresh'});
-  await session('nomfa','a1',null);expect(await startSigninLink('nomfa','initiator')).toEqual({ok:false,reason:'no_session'});
-  expect(await startSigninLink('missing','initiator')).toEqual({ok:false,reason:'no_session'});
-  const started=await startSigninLink('s1','initiator');if(!started.ok)throw new Error();
-  await session('s2','a2',6);expect(await completeSigninLink('s2',started.code)).toBe('not_fresh');
-  await session('s2','a2',0,-1);expect(await completeSigninLink('s2',started.code)).toBe('no_session');
+  await session('old','a1',6);expect(await start('old','initiator')).toEqual({ok:false,reason:'not_fresh'});
+  await session('nomfa','a1',null);expect(await start('nomfa','initiator')).toEqual({ok:false,reason:'not_fresh'});
+  expect(await start('missing','initiator')).toEqual({ok:false,reason:'not_fresh'});
+  const started=await start('s1','initiator');if(!started.ok)throw new Error();
+  await session('s2','a2',6);expect(await complete('s2',started.code)).toBe('not_fresh');
+  await session('s2','a2',0,-1);expect(await complete('s2',started.code)).toBe('not_fresh');
   expect(await linksFor(U1)).toEqual([]);
  });
  it('refuses the same account, from a second session of it',async()=>{
   await session('s1b','a1');
-  const started=await startSigninLink('s1','initiator');if(!started.ok)throw new Error();
-  expect(await completeSigninLink('s1b',started.code)).toBe('same_account');
+  const started=await start('s1','initiator');if(!started.ok)throw new Error();
+  expect(await complete('s1b',started.code)).toBe('invalid');
   expect(await linksFor(U1)).toEqual([]);
  });
  it('is single use and expires',async()=>{
   const first=await link();expect(first.result).toBe('linked');
-  expect(await completeSigninLink('s3',first.code)).toBe('invalid');
+  expect(await complete('s3',first.code)).toBe('invalid');
   await su(()=>pg.exec('update signin_links set revoked_at=now()'));
-  const started=await startSigninLink('s1','initiator');if(!started.ok)throw new Error();
+  const started=await start('s1','initiator');if(!started.ok)throw new Error();
   await su(()=>pg.exec("update signin_link_challenges set expires_at=now()-interval '1 second' where closed_at is null"));
-  expect(await completeSigninLink('s2',started.code)).toBe('invalid');
+  expect(await complete('s2',started.code)).toBe('invalid');
  });
  it('is bound to the initiating session: signing it out kills the challenge',async()=>{
-  const started=await startSigninLink('s1','initiator');if(!started.ok)throw new Error();
+  const started=await start('s1','initiator');if(!started.ok)throw new Error();
   await su(()=>pg.exec("delete from auth_sessions where id='s1'"));
-  expect(await completeSigninLink('s2',started.code)).toBe('invalid');
+  expect(await complete('s2',started.code)).toBe('invalid');
   expect(await linksFor(U2)).toEqual([]);
  });
  it('supersedes an earlier open challenge from the same account',async()=>{
-  const a=await startSigninLink('s1','initiator'),b=await startSigninLink('s1','initiator');
+  const a=await start('s1','initiator'),b=await start('s1','initiator');
   if(!a.ok||!b.ok)throw new Error();
-  expect(await completeSigninLink('s2',a.code)).toBe('invalid');
+  expect(await complete('s2',a.code)).toBe('invalid');
   await su(()=>pg.exec('delete from signin_link_failures'));
-  expect(await completeSigninLink('s2',b.code)).toBe('linked');
+  expect(await complete('s2',b.code)).toBe('linked');
  });
  it('locks guessing after five misses, even for the right code',async()=>{
-  const started=await startSigninLink('s1','initiator');if(!started.ok)throw new Error();
-  for(let i=0;i<5;i++)expect(await completeSigninLink('s2',newLinkCode())).toBe('invalid');
-  expect(await completeSigninLink('s2',started.code)).toBe('locked');
+  const started=await start('s1','initiator');if(!started.ok)throw new Error();
+  for(let i=0;i<5;i++)expect(await complete('s2',newLinkCode())).toBe('invalid');
+  expect(await complete('s2',started.code)).toBe('locked');
  });
  it('rejects service, deleted and unsettled-identity accounts and malformed hashes',async()=>{
   await session('svc','a4');await session('gone','a5');
-  expect(await startSigninLink('svc','initiator')).toEqual({ok:false,reason:'no_session'});
-  expect(await startSigninLink('gone','initiator')).toEqual({ok:false,reason:'no_session'});
+  expect(await start('svc','initiator')).toEqual({ok:false,reason:'not_fresh'});
+  expect(await start('gone','initiator')).toEqual({ok:false,reason:'not_fresh'});
   await su(()=>pg.query("insert into identity_bindings(user_id,auth_user_id) values($1,'zz')",[U2]));
-  const started=await startSigninLink('s1','initiator');if(!started.ok)throw new Error();
-  expect(await completeSigninLink('s2',started.code)).toBe('unsettled');
-  expect((await pg.query("select signin_link_start('s1','nothex','initiator') as r")).rows[0]).toEqual({r:'invalid'});
+  const started=await start('s1','initiator');if(!started.ok)throw new Error();
+  expect(await complete('s2',started.code)).toBe('unsettled');
+  expect((await asAuth(()=>pg.query("select signin_link_start('s1','nothex','initiator','two@example.com') as r"))).rows[0]).toEqual({r:'invalid'});
  });
  it('refuses a duplicate pair and caps links per account at five',async()=>{
   expect((await link()).result).toBe('linked');
   expect((await link('s2','s1')).result).toBe('exists');
   for(let n=10;n<14;n++){
    await su(()=>pg.query('insert into users(id,email,auth_user_id) values($1,$2,$3)',[id(n),`x${n}@example.com`,`ax${n}`]));
+   await su(()=>pg.query('insert into user_emails(user_id,email) values($1,$2)',[id(n),`x${n}@example.com`]));
    await session(`sx${n}`,`ax${n}`);expect((await link('s1',`sx${n}`)).result).toBe('linked');
   }
-  expect(await startSigninLink('s1','initiator')).toEqual({ok:false,reason:'limit'});
+  expect(await start('s1','initiator')).toEqual({ok:false,reason:'limit'});
  });
  it('does not make links transitive',async()=>{
   await link('s1','s2');await link('s2','s3');
   expect((await linksFor(U1)).map(l=>l.userId)).toEqual([U2]);
   expect((await linksFor(U3)).map(l=>l.userId)).toEqual([U2]);
  });
- it('drops a link whose sign-in id changed or whose account became deleted',async()=>{
+ it('permanently revokes a link whose sign-in id changed; restoring it never revives the link',async()=>{
   await link();
   await su(()=>pg.query("update users set auth_user_id='rebound' where id=$1",[U2]));
   expect(await linksFor(U1)).toEqual([]);
   await su(()=>pg.query("update users set auth_user_id='a2' where id=$1",[U2]));
-  expect(await linksFor(U1)).toHaveLength(1);
-  await su(()=>pg.query('update users set deleted_at=now() where id=$1',[U2]));
   expect(await linksFor(U1)).toEqual([]);
+  expect(await su(async()=>(await pg.query('select revoked_at is not null as r from signin_links')).rows)).toEqual([{r:true}]);
+  const actions=await su(async()=>(await pg.query('select action from signin_link_audit order by id')).rows.map(r=>(r as {action:string}).action));
+  expect(actions).toContain('link.revoked_invalid');
+  expect(await pairHasLinkHistory(U1,U2)).toBe(true);
+ });
+ it('permanently revokes when an account is deleted or becomes a service account, even if restored',async()=>{
+  await link();
+  await su(()=>pg.query('update users set deleted_at=now() where id=$1',[U2]));
+  await su(()=>pg.query('update users set deleted_at=null where id=$1',[U2]));
+  expect(await linksFor(U1)).toEqual([]);
+  expect((await link('s1','s3')).result).toBe('linked');
+  await su(()=>pg.query('update users set is_service=true where id=$1',[U3]));
+  await su(()=>pg.query('update users set is_service=false where id=$1',[U3]));
+  expect(await linksFor(U1)).toEqual([]);
+ });
+});
+
+describe('recipient binding and authorization boundaries',()=>{
+ it('only the intended recipient account can redeem; another MFA account holding the code is refused',async()=>{
+  const started=await start('s1','initiator','two@example.com');if(!started.ok)throw new Error();
+  expect(await complete('s3',started.code)).toBe('invalid');
+  expect(await linksFor(U1)).toEqual([]);
+  await su(()=>pg.exec('delete from signin_link_failures'));
+  expect(await complete('s2',started.code)).toBe('linked');
+ });
+ it('an unknown or unverified recipient looks identical at start but can never be redeemed',async()=>{
+  await su(()=>pg.exec("update user_emails set verified_at=null where email='three@example.com'"));
+  for(const to of ['nobody@example.com','three@example.com']){
+   const started=await start('s1','initiator',to);
+   expect(started.ok).toBe(true);if(!started.ok)continue;
+   for(const sid of ['s2','s3'])expect(await complete(sid,started.code)).toBe('invalid');
+   await su(()=>pg.exec('delete from signin_link_failures'));
+  }
+  expect(await linksFor(U1)).toEqual([]);
+ });
+ it('rejects the initiator own address, and a recipient address that lost verification before redeeming',async()=>{
+  const own=await start('s1','initiator','one@example.com');if(!own.ok)throw new Error();
+  expect(await complete('s2',own.code)).toBe('invalid');
+  await su(()=>pg.exec('delete from signin_link_failures'));
+  const started=await start('s1','initiator','two@example.com');if(!started.ok)throw new Error();
+  await su(()=>pg.exec("update user_emails set verified_at=null where email='two@example.com'"));
+  expect(await complete('s2',started.code)).toBe('invalid');
+ });
+ it('refuses a mutation without a single-use attestation, even with an ordinary fresh session id',async()=>{
+  expect(await lib.startSigninLink('s1','initiator','two@example.com')).toEqual({ok:false,reason:'not_fresh'});
+  await lib.attestFreshTotp('s1','start');
+  expect((await lib.startSigninLink('s1','initiator','two@example.com')).ok).toBe(true);
+  expect(await lib.startSigninLink('s1','initiator','two@example.com')).toEqual({ok:false,reason:'not_fresh'});
+  const started=await start('s1','initiator');if(!started.ok)throw new Error();
+  await lib.attestFreshTotp('s2','start');
+  expect(await lib.completeSigninLink('s2',started.code)).toBe('not_fresh');
+ });
+ it('rejects a stale TOTP at attest, an expired attestation, and an mfa timestamp that moved',async()=>{
+  await session('old','a1',2);expect(await lib.attestFreshTotp('old','start')).toBe(false);
+  expect(await lib.attestFreshTotp('s1','start')).toBe(true);
+  await su(()=>pg.exec("update signin_link_attestations set expires_at=now()-interval '1 second'"));
+  expect(await lib.startSigninLink('s1','initiator','two@example.com')).toEqual({ok:false,reason:'not_fresh'});
+  expect(await lib.attestFreshTotp('s1','start')).toBe(true);
+  await su(()=>pg.exec("update auth_sessions set mfa_verified_at=mfa_verified_at+interval '1 second' where id='s1'"));
+  expect(await lib.startSigninLink('s1','initiator','two@example.com')).toEqual({ok:false,reason:'not_fresh'});
+ });
+ it('enforces initiator proof freshness at completion',async()=>{
+  const started=await start('s1','initiator');if(!started.ok)throw new Error();
+  await session('s1','a1',6);
+  expect(await complete('s2',started.code)).toBe('invalid');
+  await su(()=>pg.exec('delete from signin_link_failures'));
+  await session('s1','a1',0);
+  await su(()=>pg.exec("update signin_link_challenges set initiator_proof_at=now()-interval '6 minutes'"));
+  expect(await complete('s2',started.code)).toBe('invalid');
+  expect(await linksFor(U1)).toEqual([]);
+ });
+ it('denies the app role every link function; discovery without a live MFA session is empty',async()=>{
+  const h='a'.repeat(64);
+  for(const q of ["select signin_link_attest('s1','start')",`select signin_link_start('s1','${h}','initiator','two@example.com')`,`select signin_link_complete('s2','${h}')`,`select signin_links_for('${U1}')`,"select signin_link_consume('s1','start')",`select signin_link_sweep('${U1}')`])
+   await expect(pg.query(q)).rejects.toThrow('permission denied');
+  await link();
+  await session('s1','a1',null);await session('s2','a2',null);
+  expect(await linksFor(U1)).toEqual([]);
+  await expect(pg.query('select * from signin_link_attestations')).rejects.toThrow('permission denied');
+ });
+ it('handles a reverse duplicate gracefully and rechecks the recipient cap at completion',async()=>{
+  expect((await link('s1','s2')).result).toBe('linked');
+  const reverse=await start('s2','initiator','one@example.com');if(!reverse.ok)throw new Error();
+  expect(await complete('s1',reverse.code)).toBe('exists');
+  const late=await start('s1','initiator','three@example.com');if(!late.ok)throw new Error();
+  for(let n=20;n<25;n++){
+   await su(()=>pg.query('insert into users(id,email,auth_user_id) values($1,$2,$3)',[id(n),`y${n}@example.com`,`ay${n}`]));
+   await su(()=>pg.query("insert into signin_links(user_low,user_high,auth_user_low,auth_user_high,primary_user_id,initiator_user_id) values($1,$2,'a3',$3,$1,$1)",[U3,id(n),`ay${n}`]));
+  }
+  expect(await complete('s3',late.code)).toBe('limit');
+  expect((await linksFor(U1)).map(x=>x.userId)).toEqual([U2]);
+ });
+ it('does not revive a revoked link after the binding changes back',async()=>{
+  await link();const [l]=await linksFor(U1);await revoke('s1',l.linkId);
+  await su(()=>pg.query("update users set auth_user_id='rebound' where id=$1",[U2]));
+  await su(()=>pg.query("update users set auth_user_id='a2' where id=$1",[U2]));
+  expect(await linksFor(U1)).toEqual([]);
+  expect(await pairHasLinkHistory(U1,U2)).toBe(true);
  });
 });
 
 describe('primary sign-in, revoke and audit',()=>{
  it('records the chosen primary and exposes it to both sides',async()=>{
-  const started=await startSigninLink('s1','redeemer');if(!started.ok)throw new Error();
-  await completeSigninLink('s2',started.code);
+  const started=await start('s1','redeemer');if(!started.ok)throw new Error();
+  await complete('s2',started.code);
   expect((await linksFor(U1))[0].primary).toBe(true);
   expect((await linksFor(U2))[0].primary).toBe(false);
   expect((await uidOverview(actor(U1,'one@example.com'))).signIn.current.primary).toBe(false);
@@ -159,14 +269,14 @@ describe('primary sign-in, revoke and audit',()=>{
  });
  it('lets either side revoke from a fresh session; a stranger cannot',async()=>{
   await link();const [l]=await linksFor(U1);
-  expect(await revokeSigninLink('s3',l.linkId)).toBe('not_found');
-  await session('s2','a2',6);expect(await revokeSigninLink('s2',l.linkId)).toBe('not_fresh');
-  await session('s2','a2',0);expect(await revokeSigninLink('s2',l.linkId)).toBe('revoked');
-  expect(await linksFor(U1)).toEqual([]);expect(await revokeSigninLink('s2',l.linkId)).toBe('not_found');
+  expect(await revoke('s3',l.linkId)).toBe('not_found');
+  await session('s2','a2',6);expect(await revoke('s2',l.linkId)).toBe('not_fresh');
+  await session('s2','a2',0);expect(await revoke('s2',l.linkId)).toBe('revoked');
+  expect(await linksFor(U1)).toEqual([]);expect(await revoke('s2',l.linkId)).toBe('not_found');
   expect((await link()).result).toBe('linked');
  });
  it('keeps an append-only audit and gives the app role no direct table access',async()=>{
-  await link();const [l]=await linksFor(U1);await revokeSigninLink('s1',l.linkId);
+  await link();const [l]=await linksFor(U1);await revoke('s1',l.linkId);
   const actions=await su(async()=>(await pg.query('select action from signin_link_audit order by id')).rows.map(r=>(r as {action:string}).action));
   expect(actions).toEqual(['challenge.started','link.created','link.revoked']);
   await expect(su(()=>pg.exec("update signin_link_audit set action='x'"))).rejects.toThrow('append-only');
@@ -175,7 +285,7 @@ describe('primary sign-in, revoke and audit',()=>{
   await expect(pg.query('select * from signin_link_challenges')).rejects.toThrow('permission denied');
  });
  it('stores only a hash of the code',async()=>{
-  const started=await startSigninLink('s1','initiator');if(!started.ok)throw new Error();
+  const started=await start('s1','initiator');if(!started.ok)throw new Error();
   const rows=await su(async()=>(await pg.query('select code_hash from signin_link_challenges')).rows as {code_hash:string}[]);
   expect(rows[0].code_hash).toBe(hashLinkCode(started.code));
   expect(JSON.stringify(rows)).not.toContain(started.code.replace('-',''));
@@ -205,7 +315,7 @@ describe('discovery is separate from authorization',()=>{
   expect(roster).not.toContain('Beta');expect(roster).not.toContain('two@example.com');expect(roster).not.toContain(U2);
  });
  it('ignores a revoked link',async()=>{
-  await link();const [l]=await linksFor(U1);await revokeSigninLink('s1',l.linkId);
+  await link();const [l]=await linksFor(U1);await revoke('s1',l.linkId);
   expect((await uidOverview(one)).linkedMemberships).toEqual([]);
  });
 });
@@ -234,6 +344,7 @@ describe('legacy Rana compatibility stays narrow and unverified',()=>{
   await su(async()=>{
    await pg.query("insert into users(id,email,full_name,auth_user_id) values($1,'r1@example.com','R1','r1'),($2,'r2@example.com','R2','r2')",[R1,R2]);
    await pg.query("insert into memberships(organization_id,user_id,role) values($1,$2,'owner')",[ORG2,R2]);
+   await pg.query("insert into user_emails(user_id,email) values($1,'r1@example.com'),($2,'r2@example.com')",[R1,R2]);
   });
   await session("sr1","r1");await session("sr2","r2");
  };
@@ -244,7 +355,7 @@ describe('legacy Rana compatibility stays narrow and unverified',()=>{
   expect((await link("sr1","sr2")).result).toBe("linked");
   expect((await uidOverview(r1,R2)).linkedMemberships.map(m=>m.source)).toEqual(["verified"]);
   const [l]=await linksFor(R1);
-  expect(await revokeSigninLink("sr1",l.linkId)).toBe("revoked");
+  expect(await revoke("sr1",l.linkId)).toBe("revoked");
   expect(await pairHasLinkHistory(R1,R2)).toBe(true);
   expect((await uidOverview(r1,R2)).linkedMemberships).toEqual([]);
   expect((await uidOverview(actor(R2,"r2@example.com"),R1)).linkedMemberships).toEqual([]);
@@ -262,7 +373,7 @@ describe("account page discovery data",()=>{
   expect(d[0].link.email).toBe("two@example.com");
   expect(d[0].memberships).toEqual([{id:ORG2,name:"Beta",roleLabel:expect.any(String)}]);
   expect(await verifiedDiscovery(U3)).toEqual([]);
-  await revokeSigninLink("s1",d[0].link.linkId);
+  await revoke("s1",d[0].link.linkId);
   expect(await verifiedDiscovery(U1)).toEqual([]);
  });
 });

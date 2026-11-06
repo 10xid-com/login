@@ -6,7 +6,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 const m=vi.hoisted(()=>({
  session:null as null|{sessionId:string;mfaVerifiedAt:Date|null;user:{id:string}},
  mfaVerify:vi.fn(),allow:vi.fn(),revalidatePath:vi.fn(),redirect:vi.fn(),
- start:vi.fn(),complete:vi.fn(),revoke:vi.fn(),
+ start:vi.fn(),complete:vi.fn(),revoke:vi.fn(),attest:vi.fn(),
 }));
 vi.mock('next/headers',()=>({headers:async()=>new Headers()}));
 vi.mock('next/cache',()=>({revalidatePath:m.revalidatePath}));
@@ -15,7 +15,7 @@ vi.mock('better-auth/api',()=>({APIError:class APIError extends Error{body?:unkn
 vi.mock('@/lib/auth/auth',()=>({getAuth:()=>({api:{mfaVerify:m.mfaVerify}})}));
 vi.mock('@/lib/auth/throttle',()=>({allow:m.allow}));
 vi.mock('@/lib/auth/login',()=>({assertLoginOrigin:async()=>{},getLoginSession:async()=>m.session}));
-vi.mock('@/lib/db/signin-links',()=>({startSigninLink:m.start,completeSigninLink:m.complete,revokeSigninLink:m.revoke}));
+vi.mock('@/lib/db/signin-links',()=>({attestFreshTotp:m.attest,startSigninLink:m.start,completeSigninLink:m.complete,revokeSigninLink:m.revoke}));
 import {startSigninLinkAction,completeSigninLinkAction,revokeSigninLinkAction} from '@/app/auth/signin-link-actions';
 import {SigninLinksPanel,LINK_REASONS,failureText} from '@/app/auth/signin-links-panel';
 
@@ -24,17 +24,25 @@ const LINK='11111111-1111-4111-8111-111111111111';
 beforeEach(()=>{
  vi.clearAllMocks();
  m.session={sessionId:'s1',mfaVerifiedAt:new Date(),user:{id:'a1'}};
- m.allow.mockResolvedValue(true);m.mfaVerify.mockResolvedValue({});
+ m.allow.mockResolvedValue(true);m.attest.mockResolvedValue(true);m.mfaVerify.mockResolvedValue({});
 });
 
 describe('server actions require a fresh authenticator and never redirect',()=>{
  it('start returns the code in the result only, with the chosen primary side',async()=>{
   m.start.mockResolvedValue({ok:true,code:'ABCDE-FGHJK'});
-  expect(await startSigninLinkAction(form({totp:'123456',primary:'other'}))).toEqual({ok:true,code:'ABCDE-FGHJK'});
-  expect(m.start).toHaveBeenCalledWith('s1','redeemer');
+  expect(await startSigninLinkAction(form({totp:'123456',primary:'other',recipient:' Two@Example.com '}))).toEqual({ok:true,code:'ABCDE-FGHJK'});
+  expect(m.start).toHaveBeenCalledWith('s1','redeemer','two@example.com');
+  expect(m.attest).toHaveBeenCalledWith('s1','start');
   expect(m.mfaVerify).toHaveBeenCalledWith(expect.objectContaining({body:{code:'123456'}}));
   expect(m.redirect).not.toHaveBeenCalled();
   expect(JSON.stringify(m.revalidatePath.mock.calls)).not.toContain('ABCDE');
+ });
+ it('start needs a valid recipient, and a failed attestation stops before the database',async()=>{
+  expect(await startSigninLinkAction(form({totp:'123456'}))).toEqual({ok:false,reason:'recipient'});
+  expect(await startSigninLinkAction(form({totp:'123456',recipient:'not-an-email'}))).toEqual({ok:false,reason:'recipient'});
+  m.attest.mockResolvedValue(false);
+  expect(await startSigninLinkAction(form({totp:'123456',recipient:'two@example.com'}))).toEqual({ok:false,reason:'not_fresh'});
+  expect(m.start).not.toHaveBeenCalled();
  });
  it.each([
   ['signed out',()=>{m.session=null;},{totp:'123456'},'sign_in'],
@@ -86,7 +94,7 @@ describe('account panel',()=>{
   expect(out).toContain('own browser profile');
  });
  it('has a plain-language message for every reason the actions can return',()=>{
-  for(const r of ['sign_in','rate','totp','locked','no_session','not_fresh','unsettled','limit','same_account','exists','invalid','not_found'])expect(LINK_REASONS[r]).toBeTruthy();
+  for(const r of ['sign_in','rate','totp','locked','no_session','recipient','not_fresh','unsettled','limit','same_account','exists','invalid','not_found'])expect(LINK_REASONS[r]).toBeTruthy();
   expect(failureText('something_new')).toBe(LINK_REASONS.invalid);
  });
 });

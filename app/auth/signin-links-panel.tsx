@@ -15,12 +15,13 @@ export const LINK_REASONS: Record<string, string> = {
   totp: "Enter the current 6-digit code from your authenticator app. A code works once, so wait for the next one if you just used it.",
   locked: "Too many incorrect authenticator codes. Try again in 15 minutes.",
   no_session: "This sign-in has ended. Sign in again, then retry.",
-  not_fresh: "Confirm with your authenticator again, then retry.",
+  not_fresh: "Confirm with your authenticator again, then retry. If you just signed in, wait for your authenticator to show its next code (about 30 seconds), because a code works only once.",
+  recipient: "Enter the verified email address of the other account.",
   unsettled: "One of the two accounts has a sign-in change waiting for an operator. Finish that first.",
   limit: "An account can have at most 5 verified links. End one first.",
   same_account: "That code came from this same account. Use the other account, in its own browser profile.",
   exists: "These two accounts are already linked.",
-  invalid: "That code did not work. It may be wrong, already used, expired (10 minutes), or its starting session ended. Ask for a new one.",
+  invalid: "That code did not work. It may be wrong, already used, expired (4 minutes), meant for a different account, or its starting session ended. Check the other account's verified email, then ask for a new one.",
   not_found: "That link no longer exists.",
 };
 export const failureText = (reason: string) => LINK_REASONS[reason] ?? LINK_REASONS.invalid;
@@ -81,8 +82,9 @@ export function SigninLinksPanel({ links }: { links: PanelLink[] }) {
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>You must be able to sign in to <strong>both</strong> accounts, each with its own authenticator, at the same time.</li>
           <li>Use two separate browser profiles. Signing in as the second account in this browser would end this session.</li>
-          <li>Each step asks for a fresh authenticator code from the account you are using, even if you just signed in.</li>
-          <li>The link code is shown once, works once, expires in 10 minutes, and stops working if the account that created it signs out. Never send it by email, chat or text; type it yourself.</li>
+          <li>Each step asks for a fresh authenticator code from the account you are using. If you only just signed in, wait for your authenticator&apos;s next code (about 30 seconds): the sign-in code cannot be reused.</li>
+          <li>The code only works for the account that owns the verified email address you enter. Another account holding the code cannot use it.</li>
+          <li>The link code is shown once, works once, expires in 4 minutes, works only for the other account&apos;s verified email address you enter, and stops working if the account that created it signs out. Never send it by email, chat or text; type it yourself.</li>
           <li>Anyone who controls both accounts&apos; authenticators can link them. Anyone who controls either can end the link.</li>
           <li>Ending a link does not bring back any older automatic pairing.</li>
         </ul>
@@ -125,17 +127,19 @@ export function SigninLinksPanel({ links }: { links: PanelLink[] }) {
       <h3 className="mt-6 text-sm font-semibold text-ink">Add a link</h3>
       <ol className="mt-1 list-decimal space-y-1 pl-5 text-sm text-ink-soft">
         <li>Open this page in <strong>two browser profiles</strong>, signed in as account A and account B.</li>
-        <li>In A, enter an authenticator code and press <em>Get a link code</em>.</li>
+        <li>In A, enter the <strong>verified email address of account B</strong> and an authenticator code, then press <em>Get a link code</em>.</li>
         <li>In B, enter that link code and a fresh authenticator code under <em>Use a link code</em>.</li>
         <li>Both accounts now list the link. Either one can end it.</li>
       </ol>
 
-      <form action={handle(startSigninLinkAction, "Your link code is below. It works once, for 10 minutes.")} className="mt-3">
+      <form action={handle(startSigninLinkAction, "Your link code is below. It works once, for 4 minutes, and only from the account that owns the email you entered.")} className="mt-3">
         <label htmlFor="link-primary" className={labelClass}>Which sign-in is your main one?</label>
         <select id="link-primary" name="primary" defaultValue="this" className={inputClass}>
           <option value="this">This account</option>
           <option value="other">The other account</option>
         </select>
+        <label htmlFor="link-recipient" className={`${labelClass} mt-3`}>Verified email address of the other account</label>
+        <input id="link-recipient" name="recipient" type="email" autoComplete="off" maxLength={320} required className={inputClass} />
         <Totp id="link-start-totp" />
         <Submit busy={busy}>Get a link code</Submit>
       </form>
