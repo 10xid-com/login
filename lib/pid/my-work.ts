@@ -15,7 +15,7 @@ import { CARD_TOKEN, UUID } from "./my-work-paths";
 const DEFAULT_HOST = "uid-bypaolo.10xid.com";
 const TIMEOUT_MS = 10_000;
 const MAX_JSON_BYTES = 1_000_000;
-const MAX_FILE_BYTES = 50_000_000;
+const MAX_FILE_BYTES = 100_000_000; // the Control Room's approved authenticated file limit
 const SECRET = /^[a-f0-9]{64}$/;
 
 export type WorkDeckSummary = {
@@ -255,6 +255,28 @@ const SAFE_HEADERS = {
   "cross-origin-resource-policy": "same-origin",
 };
 
+const CONTROL_OR_SEPARATOR = /[\u0000-\u001f\u007f-\u009f\u2028\u2029/\\]/;
+
+/**
+ * Download name from the trusted upstream `content-disposition`, only in the RFC 5987 form
+ * `filename*=UTF-8''<pct-encoded>`. Anything malformed, or decoding to control characters or
+ * path separators, falls back to "download". The result is re-encoded, never echoed.
+ */
+function downloadDisposition(upstream: string | null): string {
+  const fallback = 'attachment; filename="download"';
+  const match = upstream && /(?:^|[;\s])filename\*=UTF-8''([A-Za-z0-9!#$&+.^_`|~%-]{1,600})(?:\s*;|\s*$)/i.exec(upstream);
+  if (!match || /%(?![0-9A-Fa-f]{2})/.test(match[1])) return fallback;
+  let name: string;
+  try {
+    name = decodeURIComponent(match[1]);
+  } catch {
+    return fallback;
+  }
+  if (!name || name.length > 200 || CONTROL_OR_SEPARATOR.test(name) || /^\.+$/.test(name)) return fallback;
+  const encoded = encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${fallback}; filename*=UTF-8''${encoded}`;
+}
+
 export function safeJsonHeaders(): Record<string, string> {
   return { "cache-control": "private, no-store", "x-content-type-options": "nosniff", vary: "Cookie" };
 }
@@ -292,7 +314,7 @@ export async function loadCardFile(
   const inline = preview && INLINE_TYPES.test(type);
   const headers = new Headers(SAFE_HEADERS);
   headers.set("content-type", inline ? type : "application/octet-stream");
-  headers.set("content-disposition", inline ? "inline" : 'attachment; filename="download"');
+  headers.set("content-disposition", inline ? "inline" : downloadDisposition(upstream.headers.get("content-disposition")));
   return { ok: true, value: new Response(upstream.body, { status: 200, headers }) };
 }
 

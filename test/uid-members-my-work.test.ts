@@ -202,6 +202,27 @@ describe("card content and file routes", () => {
     expect(download.ok && download.value.headers.get("content-disposition")).toMatch(/^attachment/);
     expect(String(fetchMock.mock.calls.at(-1)![0])).not.toContain("preview");
   });
+
+  it("allows files up to 100 MB and keeps only a safe RFC 5987 download name", async () => {
+    const send = async (cd: string | null, length = "75000000") => {
+      const headers: Record<string, string> = { "content-type": "application/pdf", "content-length": length };
+      if (cd) headers["content-disposition"] = cd;
+      fetchMock.mockResolvedValue(new Response("x", { headers }));
+      const r = await loadCardFile(ACTOR, DECK, "card_1", FILE, false);
+      return r.ok ? r.value : r;
+    };
+    const ok = (await send("attachment; filename=\"a.pdf\"; filename*=UTF-8''Plan%20%E2%82%AC%27s.pdf")) as Response;
+    expect(ok.headers.get("content-disposition")).toBe(
+      "attachment; filename=\"download\"; filename*=UTF-8''Plan%20%E2%82%AC%27s.pdf",
+    );
+    expect(ok.headers.get("cache-control")).toBe("private, no-store");
+    expect(((await send(null, "100000000")) as Response).status).toBe(200);
+    expect(await send(null, "100000001")).toEqual({ ok: false, reason: "unavailable" });
+    for (const bad of ["%2Fetc%2Fpasswd", "a%5Cb", "a%00b", "a%0D%0Ab", "%E0%A4%A", "%C3%28", "..", "a b"]) {
+      const r = (await send(`attachment; filename*=UTF-8''${bad}`)) as Response;
+      expect(r.headers.get("content-disposition")).toBe('attachment; filename="download"');
+    }
+  });
 });
 
 describe("sign-in return path and launcher", () => {
