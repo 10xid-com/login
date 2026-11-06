@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { configuredProviders, getAuth } from "@/lib/auth/auth";
 import { authenticatorState, getLoginSession, mfaRecent, ownSignInSessions, uidHomeForSession } from "@/lib/auth/login";
 import { getOperator } from "@/lib/auth/operator";
+import { workRolesForAuthUser } from "@/lib/db/accounts";
 import { EMAIL_CHANGE_MINUTES, pendingEmailChange } from "@/lib/auth/email-change";
 import {
   cancelEmailChangeAction,
@@ -64,13 +65,14 @@ export default async function AccountPage({
   if (!session.mfaVerifiedAt) redirect("/auth/mfa?next=%2Fauth%2Faccount");
 
   const h = await headers();
-  const [sessions, accounts, factor, operator, pending, uidHome] = await Promise.all([
+  const [sessions, accounts, factor, operator, pending, uidHome, workRoles] = await Promise.all([
     ownSignInSessions(session.user.id),
     getAuth().api.listUserAccounts({ headers: h }),
     authenticatorState(session.user.id),
     getOperator(),
     pendingEmailChange(session.user.id),
     uidHomeForSession(),
+    workRolesForAuthUser(session.user.id),
   ]);
   const fresh = mfaRecent(session);
   const linked = new Set(accounts.map((a) => a.providerId));
@@ -108,6 +110,22 @@ export default async function AccountPage({
           </a>
         </>
       ) : null}
+
+      <details className="mt-6 rounded-lg border border-line" open>
+        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-ink">Work</summary>
+        {workRoles.length > 0 ? (
+          <ul aria-label="Company roles" className="divide-y divide-line-soft border-t border-line">
+            {workRoles.map((assignment) => (
+              <li key={assignment.organizationId} className="flex flex-wrap justify-between gap-x-3 gap-y-1 px-3 py-2 text-sm">
+                <span className="break-words font-medium text-ink">{assignment.organizationName}</span>
+                <span className="capitalize text-ink-soft">{assignment.role.replaceAll("_", " ")}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="border-t border-line px-3 py-2 text-sm text-ink-soft">Your company roles will appear here when they’re assigned.</p>
+        )}
+      </details>
 
       <h2 className="mt-6 text-sm font-semibold text-ink">Email address</h2>
       {pending ? (
