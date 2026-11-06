@@ -174,6 +174,12 @@ async function memberOnlyProfiles(){
    profiles.set(member.id,record);
   }
  }
+ const own=profiles.get(current.actor.id);
+ if(own){
+  for(const membership of current.linkedMemberships||[]){
+   own.memberships.push({ciD:membership,role:membership.roleLabel,signIn:membership.email});
+  }
+ }
  return profiles;
 }
 function refreshContactProfiles(){
@@ -198,6 +204,13 @@ function memberRow(member,company,editable){
  ${dates?`<small>${escape(dates)}</small>`:''}</div>
  ${editable&&member.canEdit?`<button type="button" class="um-quiet" data-um="edit" data-id="${escape(member.id)}">Edit access</button>`:''}</div>`;
 }
+function linkedMembershipsPanel(){
+ const linked=overview?.linkedMemberships||[];
+ if(!linked.length)return '';
+ return `<section class="um-panel"><h3>Memberships on your other sign-in</h3><div class="um-list">${linked.map(m=>`<div class="um-row"><div>
+  <strong>${escape(m.name)}</strong><small>${escape(m.roleLabel)} · ${escape(m.email)}</small>
+ </div></div>`).join('')}</div></section>`;
+}
 function renderRoster(){
  if(!roster)return '<section class="um-panel"><p role="status">Loading members…</p></section>';
  return roster.map(({name,company})=>{
@@ -210,8 +223,8 @@ function renderRoster(){
 }
 function render(){
  stage.innerHTML=header()+received();
- if(business===ALL_CIDS){stage.insertAdjacentHTML('beforeend',renderRoster());return;}
- if(!business){stage.insertAdjacentHTML('beforeend','<section class="um-panel"><h3>Your business Channels</h3><p>No business memberships are available. Accepted invitations will appear here.</p></section>');return;}
+ if(business===ALL_CIDS){stage.insertAdjacentHTML('beforeend',renderRoster()+linkedMembershipsPanel());return;}
+ if(!business){stage.insertAdjacentHTML('beforeend','<section class="um-panel"><h3>Your business Channels</h3><p>No business memberships are available for this sign-in. Accepted invitations will appear here.</p></section>'+linkedMembershipsPanel());return;}
  if(!detail){stage.insertAdjacentHTML('beforeend','<section class="um-panel"><p>Loading members…</p></section>');return;}
  stage.insertAdjacentHTML('beforeend',`<section class="um-panel"><div class="um-panel-head"><div><h3>${escape(detail.business.name)}</h3>
  <p>${detail.members.length} ${detail.directoryVisible?'member'+(detail.members.length===1?'':'s'):'membership'}${detail.pending.length?' · '+detail.pending.length+' pending':''}</p></div>
