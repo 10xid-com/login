@@ -61,9 +61,14 @@ export async function assertAuthRole(): Promise<void> {
            r.rolsuper as is_super,
            r.rolbypassrls as can_bypass,
            (select count(*)::int from pg_tables
-             where schemaname = 'public' and tablename like 'auth\\_%'
+             where schemaname in ('public', 'system') and tablename like 'auth\\_%'
                and tableowner = current_user) as owns_auth_tables,
-           has_table_privilege(current_user, 'public.users', 'SELECT') as reads_users
+           exists (
+             select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+             where n.nspname in ('public', 'identity') and c.relname = 'users'
+               and c.relkind in ('r', 'p', 'v')
+               and has_table_privilege(current_user, c.oid, 'SELECT')
+           ) as reads_users
       from pg_roles r where r.rolname = current_user
   `);
   const row = rows[0];
