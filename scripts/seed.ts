@@ -59,8 +59,8 @@ async function main() {
 
   await db.query(`
     truncate job_events, jobs, sso_tickets, staff_grants, sessions,
-             sign_in_codes, memberships, organization_domains, users,
-             organizations restart identity cascade
+             sign_in_codes, "role", organization_domains, users,
+             "CiD" restart identity cascade
   `);
 
   const org = async (type: string, name: string, slug: string, hex: string | null) => {

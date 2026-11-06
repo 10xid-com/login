@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { Client } from "pg";
+import { restoreLegacyIdentityNames } from "./support/legacy-identity-tables";
 
 const owner = new Client({ connectionString: process.env.DATABASE_URL });
 
@@ -21,6 +22,7 @@ test("video uploads upgrade alongside live connections and legacy photos", async
   await owner.query("begin");
   try {
     // Recreate the deployed 0034 state, without changing the shared fixtures.
+    await restoreLegacyIdentityNames(owner);
     await owner.query("drop table social_media_uploads");
     const org = (await owner.query(`
       insert into organizations (type, name, slug)

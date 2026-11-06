@@ -105,7 +105,7 @@ const EXEMPT: Record<string, string> = {
     "Looked up by hostname on an anonymous request, to theme the sign-in page " +
     "before anyone has a session. Contains no client data — only which brand " +
     "belongs to which address.",
-  memberships:
+  role:
     "Read to work out which companies a person belongs to. This is what " +
     "PRODUCES the scope, so it cannot itself require one.",
   staff_grants:
