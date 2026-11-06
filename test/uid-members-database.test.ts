@@ -29,7 +29,7 @@ beforeAll(async()=>{
   create table organizations(id uuid primary key,name text,slug text unique,type text default 'client',member_visibility text default 'closed',deleted_at timestamptz);
   create table users(id uuid primary key,email text,full_name text,auth_user_id text,is_service boolean default false,deleted_at timestamptz);
   create table user_emails(user_id uuid references users,email text,is_primary boolean default true,verified_at timestamptz default now());
-  create table memberships(id uuid default gen_random_uuid(),organization_id uuid references organizations,user_id uuid references users,role membership_role,updated_at timestamptz default now(),unique(user_id,organization_id));
+  create table memberships(id uuid default gen_random_uuid(),organization_id uuid references organizations,user_id uuid references users,role membership_role,created_at timestamptz not null default now(),updated_at timestamptz default now(),unique(user_id,organization_id));
   create table permissions(id uuid default gen_random_uuid(),organization_id uuid references organizations,user_id uuid references users,capability text,scope_type text,scope_id uuid,deny boolean default false,granted_by uuid references users,revoked_at timestamptz);
   create table invitations(id uuid default gen_random_uuid(),organization_id uuid references organizations,email text,role membership_role,invited_by uuid references users,expires_at timestamptz,accepted_at timestamptz,revoked_at timestamptz,created_at timestamptz default now());
   create table audit_events(id bigserial,organization_id uuid references organizations,actor_user_id uuid references users,action text,target text);
@@ -114,6 +114,8 @@ describe('central Members data and authorization as a restricted role',()=>{
  it('respects a closed member directory for ordinary members',async()=>{
   const response=await uidMembers(viewer,A);expect(response.members.map(m=>m.id)).toEqual([VIEWER]);expect(response.pending).toEqual([]);
   expect(response.members[0].canEdit).toBe(false);
+  expect(new Date(response.members[0].assignedAt).toISOString()).toBe(response.members[0].assignedAt);
+  expect(new Date(response.members[0].updatedAt).toISOString()).toBe(response.members[0].updatedAt);
  });
  it('grants explicit inventory access, saves centrally and rejects stale edits',async()=>{
   const before=await member(VIEWER);
