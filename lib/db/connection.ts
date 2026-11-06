@@ -61,7 +61,7 @@ export async function assertRestrictedRole(): Promise<void> {
       r.rolbypassrls as can_bypass,
       (select count(*)::int
          from pg_tables
-        where schemaname = 'public'
+        where schemaname in ('public', 'work', 'system')
           and tablename in ('jobs','job_events','api_keys','invitations')
           and tableowner = current_user) as owns_tenant_tables
     from pg_roles r
