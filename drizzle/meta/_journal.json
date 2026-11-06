@@ -428,6 +428,13 @@
       "when": 1790004400000,
       "tag": "0060_complete_cid_setup",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1790004500000,
+      "tag": "0061_pid_cid_role",
+      "breakpoints": true
     }
   ]
 }
