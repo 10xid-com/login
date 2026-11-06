@@ -43,3 +43,15 @@ Creates, idempotently with fixed ids: organizations `pilot-branding`, `pilot-vin
 verified, invite-style accounts with a Better Auth scrypt password and a confirmed authenticator:
 `pilot.manager@` owner and `pilot.member@` editor in pilot-branding; `pilot.alternate@` manager
 and `pilot.outside@` member in pilot-vinyl (all `@rehearsal.invalid`). No backup codes are issued.
+
+## ACL hardening follow-up (staging only)
+
+`npm run pilot:db-acl-hardening` (`--acl-only`; same env and gates, no migrate, no password change).
+As `ci_owner` it runs only `REVOKE EXECUTE ... FROM PUBLIC` on: `flow_pin_allowed_time()`,
+`flow_stamp_claim_window()`, `flow_inherit_task_org()`, `flow_task_chain(uuid)`,
+`flow_same_company(uuid,uuid)`, `flow_enforce_separation_of_duty()`, `auth_sessions_purge_dead()`.
+All are SECURITY DEFINER trigger functions; triggers do not check EXECUTE and nested helpers run as
+owner. Explicit grants to named roles are never touched (compared before/after). Then it re-verifies.
+Expected policy: no PUBLIC EXECUTE on any SECURITY DEFINER function in `public`; `portal_app` may
+SELECT `public.role` / `public.memberships` (0061, derives CiD scope); `portal_auth` is denied both;
+`jobs` is RLS-isolated (0 rows unscoped). No production migration was added.
