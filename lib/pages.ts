@@ -78,6 +78,18 @@ export const GROUPS = [
 export type Group = (typeof GROUPS)[number];
 
 export const PAGES: PageRecord[] = [
+  { id: "cid.editor-api", path: "/api/cid/[slug]/editor", name: "Company profile editor API",
+    purpose: "Let authorized company editors read and update the matching CiD profile.",
+    audience: "member", kind: "machinery", file: "app/api/cid/[slug]/editor/route.ts", methods: ["GET", "PUT", "OPTIONS"], group: "Machinery" },
+  { id: "cid.work-decks-api", path: "/api/cid/[slug]/work-decks", name: "Company Work Decks API",
+    purpose: "Read Work Decks for the company when the signed-in account has access.",
+    audience: "member", kind: "machinery", file: "app/api/cid/[slug]/work-decks/route.ts", methods: ["GET"], group: "Machinery" },
+  { id: "website-admin.authorize", path: "/auth/website-admin/authorize", name: "Website admin sign-in",
+    purpose: "Start a 10XiD sign-in handoff for a registered website and issue a single-use ticket after verification.",
+    audience: "public", kind: "machinery", file: "app/auth/website-admin/authorize/route.ts", methods: ["GET"], group: "Machinery" },
+  { id: "website-admin.redeem", path: "/api/website-admin/redeem", name: "Website admin ticket redemption",
+    purpose: "Let a registered website server authenticate and redeem its single-use sign-in ticket.",
+    audience: "public", kind: "machinery", file: "app/api/website-admin/redeem/route.ts", methods: ["POST"], group: "Machinery" },
   { id: "cid.editing-access", path: "/api/cid/[slug]/access", name: "Company editing visibility",
     purpose: "Reveal only whether this signed-in account may edit the exact matching public CiD.",
     audience: "public", kind: "machinery", file: "app/api/cid/[slug]/access/route.ts", methods: ["GET"], group: "Machinery" },
