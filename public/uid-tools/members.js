@@ -144,7 +144,7 @@ function profileContent(id,name,email){
  const memberships=profile.memberships.map(m=>escape(m.ciD.name+' · '+m.role)+(m.signIn?' ('+emailLink(m.signIn)+')':'')).sort().join(', ');
  const deckCiDs=[...new Set(profile.sources.map(s=>s.ciD.name).filter(Boolean))].sort().join(', ');
  return heading+`${profile.phone?`<small>Phone · ${phoneLink(profile.phone)}</small>`:''}<small><strong>CiD memberships</strong> · ${memberships}</small>
- <small><strong>Listed as a contact for</strong> · ${escape(deckCiDs||'No Work Deck contact records')}</small>
+ ${profile.memberOnly?'':`<small><strong>Listed as a contact for</strong> · ${escape(deckCiDs||'No Work Deck contact records')}</small>`}
  ${profile.sources.length?`<details><summary>Work Deck contact details</summary>${profile.sources.map(({contact:c,ciD,deck:d})=>`<div>
   <a href="#work-deck-${escape(d.id)}" data-um="open-work-deck" data-id="${escape(d.id)}">${escape(d.title||'Open Work Deck')}</a>
   <small>${escape([ciD.name,c.role||(c.vendor?'Vendor contact':'Client contact'),c.vendor?d.vendor:''].filter(Boolean).join(' · '))}</small>
@@ -154,9 +154,28 @@ function profileContent(id,name,email){
   ${c.vendor&&d.vendorAddress?`<small>${escape(d.vendorAddress)}</small>`:''}
  </div>`).join('')}</details>`:''}`;
 }
+async function memberOnlyProfiles(){
+ const current=await refreshOverview();
+ const results=await Promise.allSettled(current.businesses.map(b=>api('members',{business:b.id})));
+ const people=new Map(),profiles=new Map();
+ for(const result of results){
+  if(result.status!=='fulfilled')continue;
+  const {business,members}=result.value;
+  for(const member of members){
+   const group=member.contactGroup;
+   const key=group?'group:'+group.key:member.id;
+   if(!people.has(key))people.set(key,{name:group?.name||member.name,email:member.email,memberships:[],sources:[],memberOnly:true});
+   const record=people.get(key);
+   if(group?.primary)record.email=member.email;
+   if(member.contactPhone&&(group?.primary||!record.phone))record.phone=member.contactPhone;
+   record.memberships.push({ciD:business,role:roleLabel(member.role),signIn:group?member.email:''});
+   profiles.set(member.id,record);
+  }
+ }
+ return profiles;
+}
 function refreshContactProfiles(){
- const loadProfiles=root.WorkDeck?.contactProfiles;
- if(!loadProfiles)return;
+ const loadProfiles=root.WorkDeck?.contactProfiles||memberOnlyProfiles;
  const ticket=++profileRequest;
  contactProfiles=null;
  loadProfiles().then(profiles=>{
