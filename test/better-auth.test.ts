@@ -37,7 +37,7 @@ const { closeAuthPool, assertAuthRole } = await import("@/lib/db/auth-connection
 const { closePool } = await import("@/lib/db/connection");
 const { inviteToOrganization } = await import("@/lib/db/invitations");
 const { mintTicket, redeemTicket, consumeTicketsForAuthSession } = await import("@/lib/db/identity");
-const { accountAddresses, userByAuthUserId } = await import("@/lib/db/accounts");
+const { accountAddresses, userByAuthUserId, workRolesForAuthUser } = await import("@/lib/db/accounts");
 const { confirmEmailChange, requestEmailChange } = await import("@/lib/auth/email-change");
 const { hashTicket } = await import("@/lib/auth/sso");
 const { uidSiteSecret } = await import("@/lib/auth/uid-sites");
@@ -541,6 +541,7 @@ describe("signing in grants nothing by itself", () => {
     const { b, email } = await invitedAndSignedIn("invited", "owner");
     const id = (await authUserId(email))!;
     expect(await userByAuthUserId(id)).toBeNull();
+    expect(await workRolesForAuthUser(id)).toEqual([]);
     await enroll(b);
     const s = (await b.session())!;
     const outcome = await resolveAccount({ id, email, emailVerified: true, name: "x" });
@@ -549,6 +550,21 @@ describe("signing in grants nothing by itself", () => {
     expect(account?.email).toBe(email);
     const m = await owner.query("select organization_id, role from memberships where user_id = $1", [account!.id]);
     expect(m.rows).toEqual([{ organization_id: orgId, role: "owner" }]);
+    const second = await owner.query<{ id: string }>(
+      "insert into organizations (type, name, slug) values ('client', $1, $2) returning id",
+      [`${TAG} second company`, `${TAG}-second-company`],
+    );
+    const secondOrg = second.rows[0]!.id;
+    made.orgs.push(secondOrg);
+    await owner.query("insert into memberships (organization_id, user_id, role) values ($1, $2, 'member')", [
+      secondOrg, account!.id,
+    ]);
+    const roles = await workRolesForAuthUser(id);
+    expect(roles).toHaveLength(2);
+    expect(roles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ organizationId: orgId, role: "owner" }),
+      expect.objectContaining({ organizationId: secondOrg, role: "member" }),
+    ]));
     expect(s.session.mfaVerifiedAt).toBeTruthy();
     // The second time, it is already bound.
     expect(await resolveAccount({ id, email, emailVerified: true, name: "x" })).toBe("bound");
