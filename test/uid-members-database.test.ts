@@ -48,6 +48,7 @@ beforeAll(async()=>{
  ownershipMigration=await readFile(new URL('../drizzle/0058_uid_inventory_owners.sql',import.meta.url),'utf8');
  await pg.exec(ownershipMigration);
  await pg.exec(await readFile(new URL('../drizzle/0062_verified_signin_links.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../drizzle/0063_signin_link_pair_history.sql',import.meta.url),'utf8'));
  process.env.CLOTHING_BUSINESS_SLUG='tbox-studio';process.env.CLOTHING_API_URL='https://clothing.example.com';process.env.CLOTHING_API_KEY='x'.repeat(40);
 },60000);
 beforeEach(async()=>{

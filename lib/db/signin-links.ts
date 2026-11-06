@@ -43,3 +43,9 @@ export async function linksFor(userId: string): Promise<SigninLink[]> {
     email: String(row.partner_email), name: String(row.partner_name), primary: row.partner_is_primary === true,
     verifiedAt: new Date(String(row.verified_at)).toISOString() }));
 }
+
+/** True if this pair has ever had a verified link, active or revoked. Blocks the legacy fallback for good. */
+export async function pairHasLinkHistory(userId: string, otherId: string): Promise<boolean> {
+  const result = await db.execute(sql`select signin_link_pair_history(${userId}::uuid, ${otherId}::uuid) as r`);
+  return (result.rows[0] as Record<string, unknown> | undefined)?.r === true;
+}

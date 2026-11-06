@@ -15,12 +15,18 @@ A link ties two portal accounts (stable `users.id` + `auth_user_id`) so a person
 ## Legacy Rana pair
 `lib/uid/legacy-rana-compat.ts` keeps the old behavior byte-for-byte (two ids, `uid-rana.10xid.com` only, display only, contact grouping) and is marked `source:"legacy"`. It is **not** seeded into `signin_links`. Remove it after both Rana accounts complete the flow below.
 
+**No resurrection (migration 0063).** `signin_link_pair_history(a,b)` (SECURITY DEFINER, returns true if any link row, active or revoked, exists for the pair) makes `uidOverview` drop the legacy fallback for that pair once an explicit link has ever existed. After a revoke, neither account sees the other's businesses until a new verified link is made. The check fails closed (an error hides legacy display).
+
+## Account page
+`/auth/account` and `/auth/pid` render `SigninLinksPanel` (`app/auth/signin-links-panel.tsx`): steps, security assumptions, start / use-code / end-link forms and the active links with the partner's businesses (display only, from `verifiedDiscovery`). Every submit needs a fresh authenticator code. The one-time code is returned by the server action into client memory only, never a URL, redirect, storage or log. Switching accounts is deliberately not offered: the page says to sign in as the other account in its own browser profile, because signing out here would end the proving session.
+
 ## Deploy order
-1. Deploy migration 0062 (additive, creates no links, touches no tenant data). 2. Deploy app (older app ignores the new tables; the new app needs 0062 first because `uidOverview` calls `signin_links_for`). 3. Optional: PiD site renders `signIn`/`source`.
+1. Deploy migrations 0062 and 0063 (additive, create no links, touch no tenant data). 2. Deploy app (older app ignores the new tables; the new app needs both first because `uidOverview` calls `signin_links_for` and `signin_link_pair_history`). 3. Optional: PiD site renders `signIn`/`source`.
 Rollback: revert app; migration can stay.
 
 ## Not done / remaining
-- **No page yet.** `app/auth/signin-link-actions.ts` (start/complete/revoke, TOTP re-confirm each time, throttle `signinLink`) is unwired; a `/auth/account` section is needed. The code is returned to the caller, not placed in a URL.
+- Page is built but not exercised in a real browser with two real sessions (no live DB/auth in this workspace); covered by PGlite, mocked-action and server-render tests only.
+- No in-page "switch account" button, by design (see above).
 - Two simultaneous different-account sessions are required (two browsers/profiles); login UX is single-account per browser.
 - No shared-mailbox flag exists in the schema; shared accounts rely on individual authenticator proof of both.
 - Not run against real Postgres (PGlite only); 22 existing test files need a live DB and fail identically on base.

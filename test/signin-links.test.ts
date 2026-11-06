@@ -15,8 +15,8 @@ vi.mock('@/lib/db/connection',()=>({
   await tx.execute(sql`select set_config('app.authenticating','on',true)`);return fn(tx);
  }),
 }));
-import {startSigninLink,completeSigninLink,revokeSigninLink,linksFor,hashLinkCode,newLinkCode} from '@/lib/db/signin-links';
-import {uidOverview,uidMembers,uidChangeMember,type UidActor} from '@/lib/db/uid-members';
+import {startSigninLink,completeSigninLink,revokeSigninLink,linksFor,pairHasLinkHistory,hashLinkCode,newLinkCode} from '@/lib/db/signin-links';
+import {uidOverview,uidMembers,uidChangeMember,verifiedDiscovery,type UidActor} from '@/lib/db/uid-members';
 import {legacyLinkedAccount,LEGACY_RANA_ACCOUNTS} from '@/lib/uid/legacy-rana-compat';
 
 const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
@@ -53,6 +53,7 @@ beforeAll(async()=>{
   grant select,insert on audit_events to portal_app;grant usage,select on sequence audit_events_id_seq to portal_app;
  `);
  await pg.exec(await readFile(new URL('../drizzle/0062_verified_signin_links.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../drizzle/0063_signin_link_pair_history.sql',import.meta.url),'utf8'));
 },60000);
 beforeEach(async()=>{
  await pg.exec(`reset role;truncate signin_link_audit,signin_links,signin_link_challenges,signin_link_failures,auth_sessions,identity_bindings,uid_inventory_owners,permissions,invitations,memberships,user_emails,users,organizations cascade;`);
@@ -227,5 +228,41 @@ describe('legacy Rana compatibility stays narrow and unverified',()=>{
   expect(o.linkedMemberships).toEqual([{id:ORG2,name:'Beta',roleLabel:expect.any(String),email:'r2@example.com',source:'legacy'}]);
   expect(o.signIn.alternates).toEqual([]);
   await expect(uidMembers(actor(R1,'r1@example.com'),ORG2)).rejects.toThrow('do not have access');
+ });
+
+ const legacyPair=async()=>{
+  await su(async()=>{
+   await pg.query("insert into users(id,email,full_name,auth_user_id) values($1,'r1@example.com','R1','r1'),($2,'r2@example.com','R2','r2')",[R1,R2]);
+   await pg.query("insert into memberships(organization_id,user_id,role) values($1,$2,'owner')",[ORG2,R2]);
+  });
+  await session("sr1","r1");await session("sr2","r2");
+ };
+ it("does not resurrect the legacy fallback after an explicit verified link is revoked",async()=>{
+  await legacyPair();
+  const r1=actor(R1,"r1@example.com");
+  expect((await uidOverview(r1,R2)).linkedMemberships.map(m=>m.source)).toEqual(["legacy"]);
+  expect((await link("sr1","sr2")).result).toBe("linked");
+  expect((await uidOverview(r1,R2)).linkedMemberships.map(m=>m.source)).toEqual(["verified"]);
+  const [l]=await linksFor(R1);
+  expect(await revokeSigninLink("sr1",l.linkId)).toBe("revoked");
+  expect(await pairHasLinkHistory(R1,R2)).toBe(true);
+  expect((await uidOverview(r1,R2)).linkedMemberships).toEqual([]);
+  expect((await uidOverview(actor(R2,"r2@example.com"),R1)).linkedMemberships).toEqual([]);
+ });
+ it("reports no pair history for accounts that never linked",async()=>{
+  expect(await pairHasLinkHistory(U1,U3)).toBe(false);
+ });
+});
+
+describe("account page discovery data",()=>{
+ it("lists active links with the partner memberships, display only, and drops revoked ones",async()=>{
+  await link();
+  const d=await verifiedDiscovery(U1);
+  expect(d).toHaveLength(1);
+  expect(d[0].link.email).toBe("two@example.com");
+  expect(d[0].memberships).toEqual([{id:ORG2,name:"Beta",roleLabel:expect.any(String)}]);
+  expect(await verifiedDiscovery(U3)).toEqual([]);
+  await revokeSigninLink("s1",d[0].link.linkId);
+  expect(await verifiedDiscovery(U1)).toEqual([]);
  });
 });

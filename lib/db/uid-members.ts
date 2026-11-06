@@ -2,7 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { db, inAuthenticationTransaction, inOwnerTransaction, type Transaction } from "./connection";
-import { linksFor } from "@/lib/db/signin-links";
+import { linksFor, pairHasLinkHistory } from "@/lib/db/signin-links";
 import { ROLES, ROLE_LABELS, CLOTHING_CAPABILITIES, isRole, managesMembers, mayChange, clothingLevel, MemberError } from "@/lib/uid/member-policy";
 
 export type UidActor = { userId: string; email: string; name: string; addresses: string[] };
@@ -75,7 +75,8 @@ export async function uidOverview(actor: UidActor, linkedAccountId?: string) {
   const verified = await linksFor(actor.userId);
   const sources: { id: string; source: "verified" | "legacy" }[] = [
     ...verified.map(link => ({ id: link.userId, source: "verified" as const })),
-    ...(linkedAccountId && !verified.some(link => link.userId === linkedAccountId) ? [{ id: linkedAccountId, source: "legacy" as const }] : []),
+    // Legacy fallback only for a pair that has NEVER had a verified link: a revoked (or dropped) one stays gone.
+    ...(linkedAccountId && !(await pairHasLinkHistory(actor.userId, linkedAccountId)) ? [{ id: linkedAccountId, source: "legacy" as const }] : []),
   ];
   const linkedMemberships: { id: string; name: string; roleLabel: string; email: string; source: "verified" | "legacy" }[] = [];
   for (const source of sources) {
@@ -93,6 +94,23 @@ export async function uidOverview(actor: UidActor, linkedAccountId?: string) {
   };
   return { actor: { id: actor.userId, name: actor.name, email: actor.email }, businesses, incoming, linkedMemberships, signIn,
     roles: ROLES.map(value=>({value,label:ROLE_LABELS[value]})) };
+}
+/**
+ * Account-page discovery for the signed-in person's OWN verified links: each partner sign-in and the
+ * businesses it belongs to, as display text only. Grants nothing and never reaches a roster.
+ */
+export async function verifiedDiscovery(userId: string) {
+  const links = await linksFor(userId);
+  const out: { link: (typeof links)[number]; memberships: { id: string; name: string; roleLabel: string }[] }[] = [];
+  for (const link of links) {
+    const found = (await db.execute(sql`
+      select o.id::text, o.name, m.role::text from memberships m
+      join organizations o on o.id=m.organization_id and o.deleted_at is null
+      where m.user_id=${link.userId}::uuid order by o.name,o.id`)).rows;
+    out.push({ link, memberships: found.flatMap(entry => isRole(entry.role)
+      ? [{ id: String(entry.id), name: String(entry.name), roleLabel: ROLE_LABELS[entry.role] }] : []) });
+  }
+  return out;
 }
 export async function uidMembers(actor: UidActor, organizationId: string) {
   return inOwnerTransaction(organizationId,actor.userId,async tx=>{

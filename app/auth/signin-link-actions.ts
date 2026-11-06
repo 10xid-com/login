@@ -1,6 +1,7 @@
 "use server";
 
 import { headers } from "next/headers";
+import { revalidatePath } from "next/cache";
 import { APIError } from "better-auth/api";
 import { z } from "zod";
 import { getAuth } from "@/lib/auth/auth";
@@ -9,7 +10,7 @@ import { assertLoginOrigin, getLoginSession } from "@/lib/auth/login";
 import { completeSigninLink, revokeSigninLink, startSigninLink } from "@/lib/db/signin-links";
 
 /**
- * Verified sign-in links: server actions. NOT yet wired to a page (see
+ * Verified sign-in links: server actions, used by the account page (see
  * docs/verified-signin-links.md). Each one re-confirms the authenticator for
  * the CURRENT session (fresh confirmation) and then calls the database
  * function, which independently checks the session is live and fresh. They
@@ -17,6 +18,8 @@ import { completeSigninLink, revokeSigninLink, startSigninLink } from "@/lib/db/
  */
 const totp = z.string().trim().regex(/^\d{6}$/);
 export type LinkActionResult = { ok: true; code?: string } | { ok: false; reason: string };
+
+const refresh = () => { revalidatePath("/auth/account"); revalidatePath("/auth/pid"); };
 
 async function freshConfirm(form: FormData): Promise<{ sessionId: string; userId: string } | { reason: string }> {
   await assertLoginOrigin();
@@ -50,7 +53,9 @@ export async function completeSigninLinkAction(form: FormData): Promise<LinkActi
   const code = z.string().trim().max(16).safeParse(form.get("code"));
   if (!code.success) return { ok: false, reason: "invalid" };
   const result = await completeSigninLink(step.sessionId, code.data);
-  return result === "linked" ? { ok: true } : { ok: false, reason: result };
+  if (result !== "linked") return { ok: false, reason: result };
+  refresh();
+  return { ok: true };
 }
 
 export async function revokeSigninLinkAction(form: FormData): Promise<LinkActionResult> {
@@ -59,5 +64,7 @@ export async function revokeSigninLinkAction(form: FormData): Promise<LinkAction
   const id = z.string().uuid().safeParse(form.get("link"));
   if (!id.success) return { ok: false, reason: "invalid" };
   const result = await revokeSigninLink(step.sessionId, id.data);
-  return result === "revoked" ? { ok: true } : { ok: false, reason: result };
+  if (result !== "revoked") return { ok: false, reason: result };
+  refresh();
+  return { ok: true };
 }

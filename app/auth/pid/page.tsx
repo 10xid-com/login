@@ -4,7 +4,9 @@ import { redirect } from "next/navigation";
 import { configuredProviders, getAuth } from "@/lib/auth/auth";
 import { authenticatorState, getLoginSession, mfaRecent, ownSignInSessions, uidHomeForSession } from "@/lib/auth/login";
 import { getOperator } from "@/lib/auth/operator";
-import { workRolesForAuthUser } from "@/lib/db/accounts";
+import { userByAuthUserId, workRolesForAuthUser } from "@/lib/db/accounts";
+import { verifiedDiscovery } from "@/lib/db/uid-members";
+import { SigninLinksPanel } from "../signin-links-panel";
 import { EMAIL_CHANGE_MINUTES, pendingEmailChange } from "@/lib/auth/email-change";
 import {
   cancelEmailChangeAction,
@@ -72,6 +74,8 @@ export default async function PidPage({
     uidHomeForSession(),
     workRolesForAuthUser(session.user.id),
   ]);
+  const account = await userByAuthUserId(session.user.id);
+  const discovery = account ? await verifiedDiscovery(account.id) : [];
   const fresh = mfaRecent(session);
   const linked = new Set(accounts.map((a) => a.providerId));
   const hasPassword = linked.has("credential");
@@ -230,6 +234,8 @@ export default async function PidPage({
             ))}
           </>
         ) : null}
+
+        {account ? <SigninLinksPanel links={discovery.map(({ link, memberships }) => ({ linkId: link.linkId, email: link.email, name: link.name, primary: link.primary, verifiedAt: link.verifiedAt, memberships }))} /> : null}
 
         <form action={signOutAction} className="mt-6">
           <SecondaryButton>Sign out</SecondaryButton>
