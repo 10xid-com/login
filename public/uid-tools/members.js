@@ -142,9 +142,11 @@ function profileContent(id,name,email){
  ${displayEmail!==displayName?`<small>${emailLink(displayEmail)}</small>`:''}`;
  if(!profile)return heading;
  const memberships=profile.memberships.map(m=>escape(m.ciD.name+' · '+m.role)+(m.signIn?' ('+emailLink(m.signIn)+')':'')).sort().join(', ');
+ const employeeCiDs=[...new Set(profile.memberships.map(m=>m.ciD.name).filter(Boolean))].sort().join(', ');
  const deckCiDs=[...new Set(profile.sources.map(s=>s.ciD.name).filter(Boolean))].sort().join(', ');
  return heading+`${profile.phone?`<small>Phone · ${phoneLink(profile.phone)}</small>`:''}<small><strong>CiD memberships</strong> · ${memberships}</small>
- ${profile.memberOnly?'':`<small><strong>Listed as a contact for</strong> · ${escape(deckCiDs||'No Work Deck contact records')}</small>`}
+ ${employeeCiDs?`<small><strong>Employee</strong> · ${escape(employeeCiDs)}</small>`:''}
+ ${deckCiDs?`<small><strong>Listed as a contact for</strong> · ${escape(deckCiDs)}</small>`:''}
  ${profile.sources.length?`<details><summary>Work Deck contact details</summary>${profile.sources.map(({contact:c,ciD,deck:d})=>`<div>
   <a href="#work-deck-${escape(d.id)}" data-um="open-work-deck" data-id="${escape(d.id)}">${escape(d.title||'Open Work Deck')}</a>
   <small>${escape([ciD.name,c.role||(c.vendor?'Vendor contact':'Client contact'),c.vendor?d.vendor:''].filter(Boolean).join(' · '))}</small>
@@ -164,7 +166,7 @@ async function memberOnlyProfiles(){
   for(const member of members){
    const group=member.contactGroup;
    const key=group?'group:'+group.key:member.id;
-   if(!people.has(key))people.set(key,{name:group?.name||member.name,email:member.email,memberships:[],sources:[],memberOnly:true});
+   if(!people.has(key))people.set(key,{name:group?.name||member.name,email:member.email,memberships:[],sources:[]});
    const record=people.get(key);
    if(group?.primary)record.email=member.email;
    if(member.contactPhone&&(group?.primary||!record.phone))record.phone=member.contactPhone;
