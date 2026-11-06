@@ -4,7 +4,9 @@
 if(root.UIDMembers)return;
 const $=id=>document.getElementById(id),escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const levels=['No access','View only','Edit','Edit and publish'];
-let overview=null,business='',detail=null,opened=false,busy=false,request=0,clothingBusiness='',editing=null,fetchingOverview=null,heldChannels=null;
+const ALL_CIDS='all-cids';
+const memberDate=new Intl.DateTimeFormat(undefined,{dateStyle:'medium'});
+let overview=null,business='',detail=null,roster=null,opened=false,busy=false,request=0,clothingBusiness='',editing=null,fetchingOverview=null,heldChannels=null;
 const directory=new Map(),loadedScripts=new Map();
 const stage=document.createElement('section');stage.id='membersStage';stage.hidden=true;stage.setAttribute('aria-label','Members');
 (document.querySelector('main')||document.body).append(stage);
@@ -24,7 +26,7 @@ async function api(action,data={}){
 async function refreshOverview(){
  if(fetchingOverview)return fetchingOverview;
  fetchingOverview=api('overview').then(value=>{const previous=overview?.businesses.find(b=>b.id===business);overview=value;
-  if(!value.businesses.some(b=>b.id===business))business=value.businesses[0]?.id||'';
+  if(business!==ALL_CIDS&&!value.businesses.some(b=>b.id===business))business=value.businesses[0]?.id||'';
   if(!clothingBusiness)clothingBusiness=value.businesses.find(b=>b.tools.clothing.available)?.id||'';
   const current=value.businesses.find(b=>b.id===business);
   if(opened&&detail&&(detail.business.id!==business||previous?.role!==current?.role)){
@@ -109,7 +111,7 @@ $('tenxButton')?.addEventListener('click',()=>{if(!inventories.hidden)root.showH
 function header(){
  return `<div class="um-top"><button type="button" data-um="home">← Control Room</button><button type="button" data-um="refresh">Refresh</button></div>
  <div class="um-title"><div><span class="um-kicker">BUSINESS ACCESS</span><h2>Members</h2></div>
- <label>Channel<select id="membersBusiness" ${busy?'disabled':''}><option value="">Choose a business</option>${(overview?.businesses||[]).map(b=>`<option value="${escape(b.id)}" ${b.id===business?'selected':''}>${escape(b.name)}</option>`).join('')}</select></label></div>
+ <label>CiD<select id="membersBusiness" ${busy?'disabled':''}><option value="">Choose a CiD</option>${overview?.businesses.length?`<option value="${ALL_CIDS}" ${business===ALL_CIDS?'selected':''}>All CiDs</option>`:''}${(overview?.businesses||[]).map(b=>`<option value="${escape(b.id)}" ${b.id===business?'selected':''}>${escape(b.name)}</option>`).join('')}</select></label></div>
  <div id="membersNotice" class="um-notice" role="status" hidden></div>`;
 }
 function received(){
@@ -120,17 +122,36 @@ function received(){
  <button type="button" class="um-quiet" data-um="decline" data-id="${escape(invite.id)}" data-business="${escape(invite.business_id)}">Decline</button></div></div>`).join('')}</div></section>`;
 }
 function roleLabel(role){return overview?.roles.find(option=>option.value===role)?.label||({staff:'Staff (legacy)',member:'Member (legacy)'}[role])||role;}
+function memberRow(member,company,editable){
+ const name=member.name||member.email;
+ const dates=[['Assigned',member.assignedAt],['Updated',member.updatedAt]]
+  .filter(([,value])=>value&&Number.isFinite(Date.parse(value)))
+  .map(([label,value])=>label+' '+memberDate.format(new Date(value))).join(' · ');
+ return `<div class="um-row"><div class="um-person"><strong>${escape(name)}${member.id===overview.actor.id?' <span class="um-you">You</span>':''}</strong>
+ ${member.email!==name?`<small>${escape(member.email)}</small>`:''}<div class="um-tags"><span>CiD · ${escape(company.business.name)}</span><span>${escape(roleLabel(member.role))}</span>${company.clothingAvailable?`<span>Clothing · ${escape(levels[member.clothing])}</span>`:''}</div>
+ ${dates?`<small>${escape(dates)}</small>`:''}</div>
+ ${editable&&member.canEdit?`<button type="button" class="um-quiet" data-um="edit" data-id="${escape(member.id)}">Edit access</button>`:''}</div>`;
+}
+function renderRoster(){
+ if(!roster)return '<section class="um-panel"><p role="status">Loading members…</p></section>';
+ return roster.map(({name,company})=>{
+  if(!company)return `<section class="um-panel"><h3>${escape(name)}</h3><p>Members could not be loaded for this CiD.</p></section>`;
+  return `<section class="um-panel"><div class="um-panel-head"><h3>${escape(company.business.name)}</h3>
+   <button type="button" class="um-quiet" data-um="open-cid" data-business="${escape(company.business.id)}">Open CiD roster</button></div>
+   ${company.directoryVisible?'':'<p class="um-muted">Only your membership is visible for this CiD.</p>'}
+   <div class="um-list">${company.members.map(member=>memberRow(member,company,false)).join('')||'<p>No members.</p>'}</div></section>`;
+ }).join('')||'<section class="um-panel"><p>No CiDs are available.</p></section>';
+}
 function render(){
  stage.innerHTML=header()+received();
+ if(business===ALL_CIDS){stage.insertAdjacentHTML('beforeend',renderRoster());return;}
  if(!business){stage.insertAdjacentHTML('beforeend','<section class="um-panel"><h3>Your business Channels</h3><p>No business memberships are available. Accepted invitations will appear here.</p></section>');return;}
  if(!detail){stage.insertAdjacentHTML('beforeend','<section class="um-panel"><p>Loading members…</p></section>');return;}
  stage.insertAdjacentHTML('beforeend',`<section class="um-panel"><div class="um-panel-head"><div><h3>${escape(detail.business.name)}</h3>
  <p>${detail.members.length} ${detail.directoryVisible?'member'+(detail.members.length===1?'':'s'):'membership'}${detail.pending.length?' · '+detail.pending.length+' pending':''}</p></div>
  ${detail.canManage?'<button type="button" data-um="invite">+ Invite member</button>':''}</div>
  ${!detail.directoryVisible?'<p class="um-muted">You can view your membership. An owner or manager can manage the full member list.</p>':''}
- <div class="um-list">${detail.members.map(member=>`<div class="um-row"><div class="um-person"><strong>${escape(member.name)}${member.id===overview.actor.id?' <span class="um-you">You</span>':''}</strong>
- <small>${escape(member.email)}</small><div class="um-tags"><span>${escape(roleLabel(member.role))}</span>${detail.clothingAvailable?`<span>Clothing · ${escape(levels[member.clothing])}</span>`:''}</div></div>
- ${member.canEdit?`<button type="button" class="um-quiet" data-um="edit" data-id="${escape(member.id)}">Edit access</button>`:''}</div>`).join('')||'<p>No members.</p>'}</div></section>
+ <div class="um-list">${detail.members.map(member=>memberRow(member,detail,true)).join('')||'<p>No members.</p>'}</div></section>
  ${detail.pending.length?`<section class="um-panel"><h3>Pending invitations</h3><div class="um-list">${detail.pending.map(invite=>`<div class="um-row"><div><strong>${escape(invite.email)}</strong>
  <small>${escape(roleLabel(invite.role))} · ${new Date(invite.expires_at).getTime()<Date.now()?'Expired':'Awaiting acceptance'}</small></div>
  ${detail.role==='owner'||invite.role!=='owner'?`<button type="button" class="um-quiet" data-um="revoke" data-id="${escape(invite.id)}">Withdraw</button>`:''}</div>`).join('')}</div></section>`:''}
@@ -138,12 +159,19 @@ function render(){
 }
 async function open(options={}){
  root.showHome?.();root.VendorUI?.close?.();root.InventoryUI?.leave?.();root.ClothingUI?.leave?.();root.WorkDeck?.close?.();root.TaskUI?.closeCard?.();
- opened=true;stage.hidden=false;document.body.classList.add('members-open');detail=null;render();
+ opened=true;stage.hidden=false;document.body.classList.add('members-open');detail=null;roster=null;render();
  try{await refreshOverview();business=options.business||selectedBusiness();await load();if(options.invite&&detail?.canManage)inviteForm();}
  catch(error){render();notice(error.message,true);}
 }
 async function load(){
- const ticket=++request;detail=null;render();markChannel();if(!business)return;
+ const ticket=++request;detail=null;roster=null;editing=null;render();markChannel();if(!business)return;
+ if(business===ALL_CIDS){
+  const companies=overview?.businesses||[];
+  const results=await Promise.allSettled(companies.map(company=>api('members',{business:company.id})));
+  if(ticket!==request||!opened)return;
+  roster=results.map((result,index)=>({name:companies[index].name,company:result.status==='fulfilled'?result.value:null}));
+  render();return;
+ }
  try{const result=await api('members',{business});if(ticket!==request||!opened)return;detail=result;directory.set(business,result);render();reconcile();}
  catch(error){if(ticket===request){render();notice(error.message,true);}}
 }
@@ -188,6 +216,7 @@ stage.addEventListener('submit',event=>{
 stage.addEventListener('click',event=>{
  const button=event.target.closest('[data-um]');if(!button||busy)return;const action=button.dataset.um;
  if(action==='home')return root.showHome?.();if(action==='refresh')return run(async()=>{await refreshOverview();await load();});
+ if(action==='open-cid'){business=button.dataset.business;return load();}
  if(action==='invite')return inviteForm();if(action==='edit')return editForm(button.dataset.id);
  if(action==='cancel-edit'){editing=null;$('membersEditor').replaceChildren();return;}
  if(action==='accept'||action==='decline')return run(async()=>{await api(action,{business:button.dataset.business,invitationId:button.dataset.id});
