@@ -123,23 +123,34 @@ function received(){
  <button type="button" class="um-quiet" data-um="decline" data-id="${escape(invite.id)}" data-business="${escape(invite.business_id)}">Decline</button></div></div>`).join('')}</div></section>`;
 }
 function roleLabel(role){return overview?.roles.find(option=>option.value===role)?.label||({staff:'Staff (legacy)',member:'Member (legacy)'}[role])||role;}
+function emailLink(value){
+ const address=String(value??'').trim();
+ if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address))return escape(value);
+ return `<a href="mailto:${escape(encodeURIComponent(address).replace('%40','@'))}" style="color:inherit">${escape(value)}</a>`;
+}
+function phoneLink(value,label=value,extension=''){
+ const number=String(value??'').trim().replace(/[\s().-]/g,'');
+ if(!/^\+?\d{3,15}$/.test(number))return escape(label);
+ const ext=/^\d+$/.test(extension)?';ext='+extension:'';
+ return `<a href="tel:${number}${ext}" style="color:inherit">${escape(label)}</a>`;
+}
 function profileContent(id,name,email){
  const profile=contactProfiles?.get(id);
  const displayName=profile?.name||name||email;
  const displayEmail=profile?.email||email;
- const heading=`<strong>${escape(displayName)}${id===overview?.actor.id?' <span class="um-you">You</span>':''}</strong>
- ${displayEmail!==displayName?`<small>${escape(displayEmail)}</small>`:''}`;
+ const heading=`<strong>${displayName===displayEmail?emailLink(displayEmail):escape(displayName)}${id===overview?.actor.id?' <span class="um-you">You</span>':''}</strong>
+ ${displayEmail!==displayName?`<small>${emailLink(displayEmail)}</small>`:''}`;
  if(!profile)return heading;
- const memberships=profile.memberships.map(m=>m.ciD.name+' · '+m.role+(m.signIn?' ('+m.signIn+')':'')).sort().join(', ');
+ const memberships=profile.memberships.map(m=>escape(m.ciD.name+' · '+m.role)+(m.signIn?' ('+emailLink(m.signIn)+')':'')).sort().join(', ');
  const deckCiDs=[...new Set(profile.sources.map(s=>s.ciD.name).filter(Boolean))].sort().join(', ');
- return heading+`${profile.phone?`<small>Phone · ${escape(profile.phone)}</small>`:''}<small><strong>CiD memberships</strong> · ${escape(memberships)}</small>
+ return heading+`${profile.phone?`<small>Phone · ${phoneLink(profile.phone)}</small>`:''}<small><strong>CiD memberships</strong> · ${memberships}</small>
  <small><strong>Listed as a contact for</strong> · ${escape(deckCiDs||'No Work Deck contact records')}</small>
  ${profile.sources.length?`<details><summary>Work Deck contact details</summary>${profile.sources.map(({contact:c,ciD,deck:d})=>`<div>
   <a href="#work-deck-${escape(d.id)}" data-um="open-work-deck" data-id="${escape(d.id)}">${escape(d.title||'Open Work Deck')}</a>
   <small>${escape([ciD.name,c.role||(c.vendor?'Vendor contact':'Client contact'),c.vendor?d.vendor:''].filter(Boolean).join(' · '))}</small>
-  ${c.email?`<small>Email · ${escape(c.email)}</small>`:''}
-  ${c.phone?`<small>Phone · ${escape(c.phone)}${c.extension?' · Ext. '+escape(c.extension):''}</small>`:''}
-  ${c.mobile?`<small>Mobile · ${escape(c.mobile)}</small>`:''}
+  ${c.email?`<small>Email · ${emailLink(c.email)}</small>`:''}
+  ${c.phone?`<small>Phone · ${phoneLink(c.phone,c.phone,c.extension)}${c.extension?' · Ext. '+escape(c.extension):''}</small>`:''}
+  ${c.mobile?`<small>Mobile · ${phoneLink(c.mobile)}</small>`:''}
   ${c.vendor&&d.vendorAddress?`<small>${escape(d.vendorAddress)}</small>`:''}
  </div>`).join('')}</details>`:''}`;
 }
