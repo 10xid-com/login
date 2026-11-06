@@ -2,7 +2,7 @@ import "server-only";
 import { and, eq, gt, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db, inAuthenticationTransaction } from "./connection";
 import { identityBindings, invitations, sessions, users } from "./schema";
-import { emailsForUser, findUserByEmail } from "./identity";
+import { emailsForUser, findUserByEmail, membershipsForUser } from "./identity";
 
 /**
  * Sign-in identity (Better Auth) → portal account (users), as portal_app.
@@ -32,6 +32,15 @@ export async function userByAuthUserId(authUserId: string) {
     )
     .limit(1);
   return rows[0] ?? null;
+}
+
+/** Company roles for the bound account, keyed by sign-in identity. */
+export async function workRolesForAuthUser(authUserId: string) {
+  const account = await userByAuthUserId(authUserId);
+  if (!account) return [];
+
+  const roles = await membershipsForUser(account.id);
+  return roles.sort((left, right) => left.organizationName.localeCompare(right.organizationName));
 }
 
 /**
