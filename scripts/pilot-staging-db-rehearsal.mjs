@@ -66,22 +66,23 @@ const FORBIDDEN_PREFIX = ["BOOTSTRAP_", "PORTAL_", "SMTP_", "RESEND_", "STRIPE_"
 
 const HEX_PASSWORD = /^[0-9a-f]{32,128}$/;
 
-class GateError extends Error {}
+export class GateError extends Error {}
 const gateFail = (m) => {
   throw new GateError(`pilot rehearsal refused: ${m}`);
 };
 
 /**
- * Pure environment gate. Throws GateError; touches nothing outside `env`.
- * Returns the parsed target (no password).
+ * Shared target gate (environment, host, URL). Throws GateError; touches nothing
+ * outside `env`. `flagVar` names the test-only flag variable; `allow` exempts
+ * named variables from the forbidden list (used only by the fixture seed).
  */
-export function checkGates(env = process.env) {
+export function checkTarget(env = process.env, { flagVar = "PILOT_DB_REHEARSAL_TEST_ONLY", allow = [] } = {}) {
   if (env.RAILWAY_ENVIRONMENT_ID !== EXPECTED.railwayEnvironmentId) {
     gateFail("RAILWAY_ENVIRONMENT_ID is not the approved pilot-staging environment");
   }
   const name = (env.RAILWAY_ENVIRONMENT_NAME ?? "").toLowerCase();
   if (name && name !== "pilot-staging") gateFail("RAILWAY_ENVIRONMENT_NAME is not pilot-staging");
-  if (env.PILOT_DB_REHEARSAL_TEST_ONLY !== EXPECTED.testOnlyFlag) {
+  if (env[flagVar] !== EXPECTED.testOnlyFlag) {
     gateFail("explicit test-only flag missing or wrong");
   }
   for (const k of ["NODE_ENV", "APP_ENV", "DEPLOY_ENV"]) {
@@ -89,6 +90,7 @@ export function checkGates(env = process.env) {
   }
   for (const k of Object.keys(env)) {
     if (!env[k]) continue;
+    if (allow.includes(k)) continue;
     if (FORBIDDEN_EXACT.includes(k) || FORBIDDEN_PREFIX.some((p) => k.startsWith(p))) {
       gateFail(`forbidden variable present: ${k}`);
     }
@@ -113,7 +115,12 @@ export function checkGates(env = process.env) {
   if (decodeURIComponent(url.pathname) !== `/${EXPECTED.database}`) gateFail("DATABASE_URL database");
   if (url.search || url.hash) gateFail("DATABASE_URL must have no query or fragment");
   if (!url.password) gateFail("DATABASE_URL has no password");
+  return url;
+}
 
+/** Environment gate for the migration runner. Returns the parsed target (no password). */
+export function checkGates(env = process.env) {
+  const url = checkTarget(env);
   const app = env.PILOT_APP_PASSWORD;
   const auth = env.PILOT_AUTH_PASSWORD;
   if (!app || !HEX_PASSWORD.test(app)) gateFail("PILOT_APP_PASSWORD must be 32+ hex chars");

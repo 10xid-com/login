@@ -16,6 +16,23 @@ for `portal_app`/`portal_auth` (passwords via `format(%L)`), and checks for Driz
 role attributes, no dangerous grants, RLS, function EXECUTE boundaries and a login per role.
 Success prints `PILOT_DB_REHEARSAL_OK`; exit code is non-zero otherwise. Secrets are never printed.
 
-Not done: synthetic users/CiD fixtures. `npm run db:seed` writes fixed `.test` hosts/emails
-and is not loopback-guarded, so it was left out; add a dedicated synthetic seed later.
+`npm run db:seed` writes fixed `.test` hosts/emails and is not loopback-guarded, so it is not used.
 `scripts/ci-db-guard.mjs` (loopback-only) is intentionally unchanged.
+
+## Optional synthetic sign-in fixture (separate one-shot)
+
+Run only after the runner has passed: `npm run pilot:fixtures-seed`
+(`scripts/pilot-staging-fixtures.mjs`). It uses the same target guard (environment ID,
+exact private host, `ci_owner`, `portal_ci`) with its own flag `PILOT_FIXTURES_TEST_ONLY`
+set to `I_UNDERSTAND_THIS_IS_TEST_ONLY`. It refuses if the runner's flag or role passwords
+are set, and refuses if any non-`@rehearsal.invalid` sign-in identity already exists.
+
+Inputs (names only, values never printed): `PILOT_FIXTURE_PASSWORD` (12-128 chars),
+`PILOT_FIXTURE_TOTP_SECRET` (20-64 letters/digits; the raw secret the app stores, shown to
+authenticator apps in base32), `BETTER_AUTH_SECRET` (must equal the pilot login service's
+value, otherwise the stored authenticator cannot be decrypted). No mail transport is used.
+
+Creates, idempotently with fixed ids: organizations `pilot-branding`, `pilot-vinyl`, and four
+verified, invite-style accounts with a Better Auth scrypt password and a confirmed authenticator:
+`pilot.manager@` owner and `pilot.member@` editor in pilot-branding; `pilot.alternate@` manager
+and `pilot.outside@` member in pilot-vinyl (all `@rehearsal.invalid`). No backup codes are issued.

@@ -21,7 +21,8 @@
     "db:certify-copy": "node scripts/certify-copy.mjs",
     "identity:bindings": "node scripts/identity-bindings.mjs",
     "test:members": "vitest run --config vitest.members.config.mts",
-    "pilot:db-rehearsal": "node scripts/pilot-staging-db-rehearsal.mjs"
+    "pilot:db-rehearsal": "node scripts/pilot-staging-db-rehearsal.mjs",
+    "pilot:fixtures-seed": "node scripts/pilot-staging-fixtures.mjs"
   },
   "dependencies": {
     "@better-auth/utils": "0.4.2",
