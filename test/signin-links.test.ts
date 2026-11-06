@@ -4,7 +4,7 @@ import {PGlite} from '@electric-sql/pglite';
 import {drizzle} from 'drizzle-orm/pglite';
 import {sql} from 'drizzle-orm';
 
-// Isolated in-memory PostgreSQL. Runs migrations 0062-0064 itself; no production connection.
+// Isolated in-memory PostgreSQL. Runs migrations 0062-0065 itself; no production connection.
 const state=vi.hoisted(()=>({database:null as ReturnType<typeof drizzle>|null}));
 vi.mock('@/lib/db/auth-connection',()=>({
  authDb:()=>({execute:async(query:unknown)=>{await state.database!.execute(sql`set role portal_auth`);try{return await state.database!.execute(query as Parameters<ReturnType<typeof drizzle>['execute']>[0]);}finally{await state.database!.execute(sql`set role portal_app`);}}}),
@@ -58,6 +58,7 @@ beforeAll(async()=>{
   create table invitations(id uuid default gen_random_uuid(),organization_id uuid references organizations,email text,role membership_role,invited_by uuid references users,expires_at timestamptz,accepted_at timestamptz,revoked_at timestamptz,created_at timestamptz default now());
   create table audit_events(id bigserial,organization_id uuid references organizations,actor_user_id uuid references users,action text,target text);
   create table auth_sessions(id text primary key,user_id text not null,expires_at timestamptz not null,mfa_verified_at timestamptz);
+  create table auth_users(id text primary key,name text default '',email text unique not null,email_verified boolean not null default false);
   create table identity_bindings(id uuid default gen_random_uuid(),user_id uuid,auth_user_id text,decision text);
   create table uid_inventory_owners(organization_id uuid,tool text,owner_user_id uuid);
   grant select,insert,update,delete on organizations,users,user_emails,memberships,permissions,invitations,uid_inventory_owners to portal_app;
@@ -66,9 +67,10 @@ beforeAll(async()=>{
  await pg.exec(await readFile(new URL('../drizzle/0062_verified_signin_links.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../drizzle/0063_signin_link_pair_history.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../drizzle/0064_signin_link_hardening.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../drizzle/0065_signin_link_email_proof.sql',import.meta.url),'utf8'));
 },60000);
 beforeEach(async()=>{
- await pg.exec(`reset role;truncate signin_link_attestations,signin_link_audit,signin_links,signin_link_challenges,signin_link_failures,auth_sessions,identity_bindings,uid_inventory_owners,permissions,invitations,memberships,user_emails,users,organizations cascade;`);
+ await pg.exec(`reset role;truncate auth_users,signin_link_attestations,signin_link_audit,signin_links,signin_link_challenges,signin_link_failures,auth_sessions,identity_bindings,uid_inventory_owners,permissions,invitations,memberships,user_emails,users,organizations cascade;`);
  await pg.query(`insert into organizations(id,name,slug) values($1,'Alpha','alpha'),($2,'Beta','beta')`,[ORG1,ORG2]);
  await pg.query(`insert into users(id,email,full_name,auth_user_id,is_service,deleted_at) values
   ($1,'one@example.com','One','a1',false,null),($2,'two@example.com','Two','a2',false,null),($3,'three@example.com','Three','a3',false,null),
@@ -255,6 +257,106 @@ describe('recipient binding and authorization boundaries',()=>{
   await su(()=>pg.query("update users set auth_user_id='a2' where id=$1",[U2]));
   expect(await linksFor(U1)).toEqual([]);
   expect(await pairHasLinkHistory(U1,U2)).toBe(true);
+ });
+});
+
+describe('verified address: portal alias or the bound Better Auth address (0065)',()=>{
+ const authUser=(aid:string,mail:string,verified:boolean)=>su(()=>pg.query('insert into auth_users(id,email,email_verified) values($1,$2,$3) on conflict(id) do update set email=excluded.email,email_verified=excluded.email_verified',[aid,mail,verified]));
+ const aliasUnverified=(mail:string)=>su(()=>pg.query('update user_emails set verified_at=null where lower(email)=$1',[mail]));
+ // Rana as modeled after 0047: the portal alias is unverified, the bound Better Auth identity is verified.
+ const rana=async()=>{
+  await su(()=>pg.query("update users set email='samay@example.com' where id=$1",[U2]));
+  await su(()=>pg.query("update user_emails set email='samay@example.com',verified_at=null where user_id=$1",[U2]));
+  await authUser('a2','samay@example.com',true);
+ };
+ it('links when the alias is unverified but the exact bound Better Auth address is verified (Rana)',async()=>{
+  await rana();
+  const started=await start('s1','initiator','Samay@Example.com ');if(!started.ok)throw new Error();
+  expect(await complete('s2',started.code)).toBe('linked');
+  expect((await linksFor(U1)).map(l=>l.userId)).toEqual([U2]);
+ });
+ it('still links on a verified alias alone, and needs one of the two proofs',async()=>{
+  await authUser('a2','two@example.com',false);
+  expect((await link()).result).toBe('linked');
+  await su(()=>pg.exec('update signin_links set revoked_at=now()'));
+  await aliasUnverified('two@example.com');
+  const started=await start('s1','initiator','two@example.com');if(!started.ok)throw new Error();
+  expect(await complete('s2',started.code)).toBe('invalid');
+ });
+ it('does not count an unverified identity, an unbound identity, or an identity bound to another account',async()=>{
+  await rana();await authUser('a2','samay@example.com',false);
+  let started=await start('s1','initiator','samay@example.com');if(!started.ok)throw new Error();
+  expect(await complete('s2',started.code)).toBe('invalid');
+  await su(()=>pg.exec('delete from signin_link_failures'));
+  await authUser('a2','samay@example.com',true);await authUser('zz','stray@example.com',true);
+  started=await start('s1','initiator','stray@example.com');if(!started.ok)throw new Error();
+  expect(await complete('s2',started.code)).toBe('invalid');
+  // a2 is verified for samay@, but that address is not on U3 (bound to a3)
+  await su(()=>pg.exec('delete from signin_link_failures'));
+  started=await start('s1','initiator','samay@example.com');if(!started.ok)throw new Error();
+  expect(await complete('s3',started.code)).toBe('invalid');
+ });
+ it('refuses a conflicting match: two accounts claim the address (alias vs Better Auth, or alias vs alias)',async()=>{
+  await rana();
+  // U3 also holds a (verified) alias on Rana's verified Better Auth address.
+  await su(()=>pg.query("insert into user_emails(user_id,email) values($1,'samay@example.com')",[U3]));
+  let started=await start('s1','initiator','samay@example.com');if(!started.ok)throw new Error();
+  for(const sid of ['s2','s3'])expect(await complete(sid,started.code)).toBe('invalid');
+  await su(()=>pg.exec('delete from signin_link_failures'));
+  // alias vs alias, one of them unverified: still ambiguous.
+  await su(()=>pg.query("insert into user_emails(user_id,email) values($1,'two@example.com')",[U2]));
+  await su(()=>pg.query("insert into user_emails(user_id,email,verified_at) values($1,'two@example.com',null)",[U3]));
+  started=await start('s1','initiator','two@example.com');if(!started.ok)throw new Error();
+  for(const sid of ['s2','s3'])expect(await complete(sid,started.code)).toBe('invalid');
+  expect(await linksFor(U1)).toEqual([]);
+ });
+ it('rechecks the identical condition on redeem: an address claimed or unverified after start fails',async()=>{
+  await rana();
+  let started=await start('s1','initiator','samay@example.com');if(!started.ok)throw new Error();
+  await authUser('a2','samay@example.com',false);
+  expect(await complete('s2',started.code)).toBe('invalid');
+  await su(()=>pg.exec('delete from signin_link_failures'));
+  await authUser('a2','samay@example.com',true);
+  started=await start('s1','initiator','samay@example.com');if(!started.ok)throw new Error();
+  await su(()=>pg.query("insert into user_emails(user_id,email,verified_at) values($1,'samay@example.com',null)",[U3]));
+  expect(await complete('s2',started.code)).toBe('invalid');
+  expect(await linksFor(U1)).toEqual([]);
+ });
+ it('fails safely on stale or rebound proof: rebind, deletion, signed-out or expired sessions',async()=>{
+  await rana();
+  const open=async()=>{await su(()=>pg.exec('delete from signin_link_failures'));const s=await start('s1','initiator','samay@example.com');if(!s.ok)throw new Error();return s.code;};
+  let code=await open();
+  await su(()=>pg.query("update users set auth_user_id='a2b' where id=$1",[U2]));
+  await session('s2b','a2b');
+  expect(await complete('s2',code)).toBe('not_fresh');
+  expect(await complete('s2b',code)).toBe('invalid');
+  await su(()=>pg.query("update users set auth_user_id='a2' where id=$1",[U2]));
+  code=await open();
+  await su(()=>pg.exec("delete from auth_sessions where id='s1'"));
+  expect(await complete('s2',code)).toBe('invalid');
+  await session('s1','a1');code=await open();
+  await session('s1','a1',6);
+  expect(await complete('s2',code)).toBe('invalid');
+  await session('s1','a1');code=await open();
+  await session('s2','a2',0,-1);
+  expect(await complete('s2',code)).toBe('not_fresh');
+  await session('s2','a2');code=await open();
+  await su(()=>pg.exec("update signin_link_challenges set expires_at=now()-interval '1 second' where closed_at is null"));
+  expect(await complete('s2',code)).toBe('invalid');
+  await session('s1','a1');code=await open();
+  await su(()=>pg.query('update users set deleted_at=now() where id=$1',[U1]));
+  expect(await complete('s2',code)).toBe('invalid');
+  expect(await linksFor(U2)).toEqual([]);
+ });
+ it('judges proof by wall-clock time, so a long lock wait inside one transaction cannot extend it',async()=>{
+  await session('soon','a1',0,0.01);
+  const inside=await su(()=>pg.transaction(async tx=>{
+   const before=(await tx.query("select count(*)::int as n from signin_link_proof('soon',300)")).rows[0] as {n:number};
+   await tx.query('select pg_sleep(1.2)');
+   const after=(await tx.query("select count(*)::int as n from signin_link_proof('soon',300)")).rows[0] as {n:number};
+   return [before.n,after.n];
+  }));
+  expect(inside).toEqual([1,0]);
  });
 });
 

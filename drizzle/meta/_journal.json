@@ -456,6 +456,13 @@
       "when": 1790004800000,
       "tag": "0064_signin_link_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1790004900000,
+      "tag": "0065_signin_link_email_proof",
+      "breakpoints": true
     }
   ]
 }
