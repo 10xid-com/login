@@ -68,7 +68,16 @@ export async function uidOverview(actor: UidActor) {
     o.name as business_name,i.email,i.role::text,i.expires_at from invitations i join organizations o on o.id=i.organization_id
     where i.email in (${sql.join(actor.addresses.map(address=>sql`${address}`),sql`, `)})
     and i.accepted_at is null and i.revoked_at is null and i.expires_at>now() and o.deleted_at is null order by i.created_at desc`));
-  return { actor: { id: actor.userId, name: actor.name, email: actor.email }, businesses, incoming,
+  // A server-confirmed linked account contributes display metadata only.
+  const linkedRows = linkedAccountId ? (await db.execute(sql`
+    select o.id::text, o.name, m.role::text, u.email from memberships m
+    join organizations o on o.id=m.organization_id and o.deleted_at is null
+    join users u on u.id=m.user_id and u.deleted_at is null and not u.is_service
+    where m.user_id=${linkedAccountId}::uuid order by o.name,o.id`)).rows : [];
+  const linkedMemberships = linkedRows.flatMap(entry=>isRole(entry.role) ? [{
+    id:String(entry.id), name:String(entry.name), roleLabel:ROLE_LABELS[entry.role], email:String(entry.email),
+  }] : []);
+  return { actor: { id: actor.userId, name: actor.name, email: actor.email }, businesses, incoming, linkedMemberships,
     roles: ROLES.map(value=>({value,label:ROLE_LABELS[value]})) };
 }
 export async function uidMembers(actor: UidActor, organizationId: string) {
