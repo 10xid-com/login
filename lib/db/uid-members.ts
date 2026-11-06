@@ -75,7 +75,7 @@ export async function uidMembers(actor: UidActor, organizationId: string) {
   return inOwnerTransaction(organizationId,actor.userId,async tx=>{
     const actorMembership=await scope(tx,actor,organizationId);
     const manage=managesMembers(actorMembership.role);
-    const members=await rows<MemberRow>(tx,sql`select u.id::text as user_id,coalesce(u.full_name,u.email) as name,u.email,m.role::text,m.updated_at
+    const members=await rows<MemberRow & { created_at: Date | string }>(tx,sql`select u.id::text as user_id,coalesce(u.full_name,u.email) as name,u.email,m.role::text,m.created_at,m.updated_at
       from memberships m join users u on u.id=m.user_id and u.deleted_at is null and not u.is_service
       where m.organization_id=${organizationId}::uuid
       ${manage || actorMembership.member_visibility==='open' ? sql`` : sql`and u.id=${actor.userId}::uuid`}
@@ -84,6 +84,7 @@ export async function uidMembers(actor: UidActor, organizationId: string) {
     for(const member of members){
       const permissionRows=await grants(tx,organizationId,member.user_id);
       result.push({id:member.user_id,name:member.name,email:member.email,role:member.role,
+        assignedAt:new Date(member.created_at).toISOString(),updatedAt:new Date(member.updated_at).toISOString(),
         clothing:clothingLevel(member.role,permissionRows),version:version(member,permissionRows),
         canEdit:manage&&(actorMembership.role==='owner'||member.role!=='owner')});
     }
