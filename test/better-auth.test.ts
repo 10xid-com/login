@@ -1121,6 +1121,7 @@ describe("where sign-in may resume", () => {
     expect(safeNext("/auth/sso/authorize?site=x&state=y")).toBe("/auth/sso/authorize?site=x&state=y");
     expect(safeNext("/auth/uid/authorize?host=x&state=y")).toBe("/auth/uid/authorize?host=x&state=y");
     expect(safeNext("/auth/account")).toBe("/auth/account");
+    expect(safeNext("/auth/pid")).toBe("/auth/pid");
     for (const bad of ["//evil.test", "https://evil.test", "/\\evil.test", "/jobs", "/auth/sso/authorizeX", "/auth/uid/authorizeX", null, ""]) {
       expect(safeNext(bad)).toBe("/");
     }
