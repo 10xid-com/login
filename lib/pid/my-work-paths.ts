@@ -14,3 +14,18 @@ export function isMyWorkPath(path: string): boolean {
 export function deckPath(deck: string): string {
   return `${MY_WORK_PATH}/${deck}`;
 }
+
+/** Canonical Work Deck stages, in order. A stage's default card id is its 1-based position. */
+export const STAGES = ["Enquiry", "Pricing", "Quote approval", "Design", "Client proof", "File setup", "Production", "Fulfilment", "Complete"] as const;
+
+/** Position (0-based) of a stage label, or -1. */
+export function stageIndex(label: string): number {
+  const wanted = label.trim().toLowerCase();
+  return STAGES.findIndex((stage) => stage.toLowerCase() === wanted);
+}
+
+/** A `?stage=` value is a 1-based position 1..9; anything else is ignored. */
+export function parseStageParam(value: string | string[] | undefined): number {
+  const n = typeof value === "string" && /^[1-9]$/.test(value) ? Number(value) - 1 : -1;
+  return n;
+}

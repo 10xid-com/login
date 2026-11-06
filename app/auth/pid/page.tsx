@@ -102,6 +102,7 @@ export default async function PidPage({
 
       <nav aria-label="PiD sections" className="mt-3 flex gap-4 text-sm">
         <TextLink href="#work">Work</TextLink>
+        <TextLink href="/auth/pid/my-work">My Work</TextLink>
         <TextLink href="#settings">Settings</TextLink>
       </nav>
 
@@ -119,6 +120,7 @@ export default async function PidPage({
         ) : (
           <p className="border-t border-line px-3 py-2 text-sm text-ink-soft">Your company roles will appear here when they’re assigned.</p>
         )}
+        <p className="border-t border-line px-3 py-2 text-sm"><TextLink href="/auth/pid/my-work">Open My Work</TextLink></p>
       </details>
 
       <section id="settings" aria-labelledby="pid-settings" className="mt-6">

@@ -29,7 +29,10 @@ export type WorkDeckSummary = {
   owner: string;
   participants: string[];
   cards: { id: string; title: string; files: { id: string; name: string }[] }[];
+  /** Handoff history as supplied. Plain text only; no actor ids. Empty when the response has none. */
+  history: { at: string; text: string }[];
 };
+export type CardView = { notes: string[]; files: { id: string; name: string }[] };
 export type MyWorkList = { businesses: { id: string; name: string }[]; decks: WorkDeckSummary[] };
 
 export type BridgeFailure = "unavailable" | "not_found" | "forbidden";
@@ -139,7 +142,7 @@ function shapeCards(value: unknown): WorkDeckSummary["cards"] {
 }
 
 /** Whitelist the Work Deck fields the personal portal shows. Everything else is discarded. */
-export function shapeDeck(raw: unknown, fallbackId?: string): WorkDeckSummary | null {
+export function shapeDeck(raw: unknown, fallbackId?: string, events?: unknown): WorkDeckSummary | null {
   const deck = asObject(raw);
   if (!deck) return null;
   const id = (text(deck.id, 40) || fallbackId || "").toLowerCase();
@@ -156,7 +159,46 @@ export function shapeDeck(raw: unknown, fallbackId?: string): WorkDeckSummary | 
     owner: personName(deck.owner),
     participants: participants.slice(0, 50),
     cards: shapeCards(deck.cards),
+    history: shapeHistory(events),
   };
+}
+
+/** The real detail response is `{deck, events}`. Events are shown as plain text; actors and ids are dropped. */
+function shapeHistory(events: unknown): WorkDeckSummary["history"] {
+  if (!Array.isArray(events)) return [];
+  const out: WorkDeckSummary["history"] = [];
+  for (const entry of events.slice(0, 100)) {
+    const e = asObject(entry);
+    if (!e) continue;
+    const from = text(e.from ?? e.fromStage, 80);
+    const to = text(e.to ?? e.toStage ?? e.stage, 80);
+    const body =
+      text(e.summary ?? e.message ?? e.note ?? e.text ?? e.title ?? e.label, 400) ||
+      (to ? `${from ? `${from} to ` : "Moved to "}${to}` : text(e.type ?? e.kind, 80));
+    if (!body) continue;
+    out.push({ at: text(e.at ?? e.createdAt ?? e.created_at ?? e.timestamp ?? e.date, 40), text: body });
+  }
+  return out;
+}
+
+const noteText = (value: unknown): string => {
+  const direct = text(value, 4000);
+  if (direct) return direct;
+  const o = asObject(value);
+  return o ? text(o.text ?? o.body ?? o.note ?? o.content, 4000) : "";
+};
+
+/** Card content reduced to plain-text notes and files the file route can serve. Unknown fields are dropped. */
+export function shapeCardContent(raw: unknown): CardView {
+  const o = asObject(raw);
+  const list = (v: unknown): unknown[] => (Array.isArray(v) ? v.slice(0, 100) : v ? [v] : []);
+  const notes = [...list(o?.notes), ...list(o?.blocks), ...list(o?.content)].map(noteText).filter(Boolean);
+  const files = [...list(o?.files), ...list(o?.attachments)].flatMap((file) => {
+    const f = asObject(file);
+    const id = text(f?.id, 40).toLowerCase();
+    return f && UUID.test(id) ? [{ id, name: text(f.name ?? f.filename, 160) || "File" }] : [];
+  });
+  return { notes: notes.slice(0, 100), files: files.slice(0, 50) };
 }
 
 /* ---------------------------- operations ---------------------------- */
@@ -197,7 +239,7 @@ export async function loadMyDeck(actorId: string, deckId: string): Promise<Bridg
   if (!result.ok) return result;
   try {
     const body = asObject(await boundedJson(result.value));
-    const deck = shapeDeck(body?.deck, deckId);
+    const deck = shapeDeck(body?.deck, deckId, body?.events);
     // The deck must be the one asked for.
     return deck && deck.id === deckId ? { ok: true, value: deck } : { ok: false, reason: "unavailable" };
   } catch {

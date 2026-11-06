@@ -5,7 +5,17 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/lib/auth/login", () => ({ getLoginSession: m.session }));
 vi.mock("@/lib/db/accounts", () => ({ userByAuthUserId: m.account }));
 vi.mock("@/lib/auth/auth", () => ({ loginOrigin: () => "https://login.10xid.com" }));
+vi.mock("@/app/auth/auth-card", () => ({ AuthCard: ({ children }: { children: unknown }) => children }));
+vi.mock("@/app/auth/flow-ui", () => ({ TextLink: ({ href, children }: { href: string; children: unknown }) => createElement("a", { href }, children as never) }));
+vi.mock("next/navigation", () => ({
+  notFound: () => { throw new Error("NEXT_NOT_FOUND"); },
+  redirect: (to: string) => { throw new Error(`REDIRECT ${to}`); },
+}));
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import DeckPage from "@/app/auth/pid/my-work/[deck]/page";
+import { readFileSync } from "node:fs";
 import { isMyWorkPath } from "@/lib/pid/my-work-paths";
 import { loadCardFile, loadMyDeck, loadMyWork, trustedOrigin } from "@/lib/pid/my-work";
 import { myWorkActor } from "@/lib/pid/my-work-session";
@@ -209,5 +219,74 @@ describe("sign-in return path and launcher", () => {
     expect(body).toContain("const LOGIN_ORIGIN='https://login.10xid.com'");
     expect(body).not.toContain("%%LOGIN_ORIGIN%%',loginOrigin");
     expect(body).toContain("/auth/pid/my-work");
+  });
+});
+
+describe("actual {deck,events} detail: stage notes, files and history", () => {
+  const CARD_FILE = "44444444-4444-4444-8444-444444444444";
+  const detail = {
+    deck: { id: DECK, title: "Club shirts", stage: "Design", status: "Active", due: "2026-12-01", nextAction: "Approve", owner: "Rana", participants: ["Ethan"] },
+    events: [
+      { id: "e1", at: "2026-11-01T10:00:00Z", type: "handoff", from: "Pricing", to: "Design", actorId: "99999999-9999-4999-8999-999999999999", note: "Artwork <b>ready</b>" },
+      { id: "e2", createdAt: "2026-10-30", from: "Enquiry", to: "Pricing" },
+    ],
+  };
+  const render = async (stage?: string) =>
+    renderToStaticMarkup(await DeckPage({ params: Promise.resolve({ deck: DECK }), searchParams: Promise.resolve({ stage }) }));
+
+  it("keeps handoff history as plain text without actor ids", async () => {
+    fetchMock.mockResolvedValue(json(detail));
+    const result = await loadMyDeck(ACTOR, DECK);
+    expect(result.ok && result.value.history).toEqual([
+      { at: "2026-11-01T10:00:00Z", text: "Artwork <b>ready</b>" },
+      { at: "2026-10-30", text: "Enquiry to Pricing" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("99999999");
+  });
+
+  it("fetches only the current stage card (Design = 4) and renders notes, files and history safely", async () => {
+    fetchMock.mockImplementation(async (url: URL) =>
+      String(url).endsWith("/content")
+        ? json({ notes: [{ text: "Use <script>x</script> blue" }], files: [{ id: CARD_FILE, name: "logo.png", secret: "no" }] })
+        : json(detail),
+    );
+    const html = await render();
+    const urls = fetchMock.mock.calls.map(([u]) => String(u));
+    expect(urls).toEqual([
+      `https://uid-bypaolo.10xid.com/internal/pid-my-work/${DECK}`,
+      `https://uid-bypaolo.10xid.com/internal/pid-my-work/${DECK}/cards/4/content`,
+    ]);
+    expect(html).toContain("Use &lt;script&gt;x&lt;/script&gt; blue");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain(`/api/pid/my-work/${DECK}/cards/4/content/files/${CARD_FILE}?preview=1`);
+    expect(html).toContain("Artwork &lt;b&gt;ready&lt;/b&gt;");
+    expect(html).not.toContain("99999999");
+    expect(html).not.toContain("no<");
+  });
+
+  it("loads a chosen stage on demand and ignores bad stage values", async () => {
+    fetchMock.mockImplementation(async (url: URL) => (String(url).endsWith("/content") ? json({ blocks: ["Quote sent"] }) : json(detail)));
+    expect(await render("2")).toContain("Quote sent");
+    expect(String(fetchMock.mock.calls.at(-1)![0])).toMatch(/\/cards\/2\/content$/);
+    fetchMock.mockClear();
+    await render("../9");
+    expect(String(fetchMock.mock.calls.at(-1)![0])).toMatch(/\/cards\/4\/content$/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses an inline card when upstream supplies one, and survives a failed stage", async () => {
+    const inline = { deck: { ...detail.deck, cards: [{ id: "77", title: "Design", files: [{ id: CARD_FILE, name: "inline.pdf" }] }] }, events: [] };
+    fetchMock.mockImplementation(async (url: URL) => (String(url).endsWith("/content") ? new Response("", { status: 502 }) : json(inline)));
+    const html = await render();
+    expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/cards\/77\/content$/);
+    expect(html).toContain("This stage could not be loaded");
+    expect(html).not.toContain("Handoff history");
+  });
+});
+
+describe("PiD home", () => {
+  it("links straight to My Work, in the section nav and in the Work section", () => {
+    const source = readFileSync("app/auth/pid/page.tsx", "utf8");
+    expect(source.match(/href="\/auth\/pid\/my-work"/g)).toHaveLength(2);
   });
 });
