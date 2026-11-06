@@ -32,6 +32,8 @@ beforeAll(async()=>{
   create table memberships(id uuid default gen_random_uuid(),organization_id uuid references organizations,user_id uuid references users,role membership_role,created_at timestamptz not null default now(),updated_at timestamptz default now(),unique(user_id,organization_id));
   create table permissions(id uuid default gen_random_uuid(),organization_id uuid references organizations,user_id uuid references users,capability text,scope_type text,scope_id uuid,deny boolean default false,granted_by uuid references users,revoked_at timestamptz);
   create table invitations(id uuid default gen_random_uuid(),organization_id uuid references organizations,email text,role membership_role,invited_by uuid references users,expires_at timestamptz,accepted_at timestamptz,revoked_at timestamptz,created_at timestamptz default now());
+  create table auth_sessions(id text primary key,user_id text not null,expires_at timestamptz not null,mfa_verified_at timestamptz);
+  create table identity_bindings(id uuid default gen_random_uuid(),user_id uuid,auth_user_id text,decision text);
   create table audit_events(id bigserial,organization_id uuid references organizations,actor_user_id uuid references users,action text,target text);
   alter table permissions enable row level security;
   alter table invitations enable row level security;
@@ -45,6 +47,7 @@ beforeAll(async()=>{
  `);
  ownershipMigration=await readFile(new URL('../drizzle/0058_uid_inventory_owners.sql',import.meta.url),'utf8');
  await pg.exec(ownershipMigration);
+ await pg.exec(await readFile(new URL('../drizzle/0062_verified_signin_links.sql',import.meta.url),'utf8'));
  process.env.CLOTHING_BUSINESS_SLUG='tbox-studio';process.env.CLOTHING_API_URL='https://clothing.example.com';process.env.CLOTHING_API_KEY='x'.repeat(40);
 },60000);
 beforeEach(async()=>{

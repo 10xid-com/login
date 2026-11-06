@@ -2,6 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { db, inAuthenticationTransaction, inOwnerTransaction, type Transaction } from "./connection";
+import { linksFor } from "@/lib/db/signin-links";
 import { ROLES, ROLE_LABELS, CLOTHING_CAPABILITIES, isRole, managesMembers, mayChange, clothingLevel, MemberError } from "@/lib/uid/member-policy";
 
 export type UidActor = { userId: string; email: string; name: string; addresses: string[] };
@@ -68,16 +69,29 @@ export async function uidOverview(actor: UidActor, linkedAccountId?: string) {
     o.name as business_name,i.email,i.role::text,i.expires_at from invitations i join organizations o on o.id=i.organization_id
     where i.email in (${sql.join(actor.addresses.map(address=>sql`${address}`),sql`, `)})
     and i.accepted_at is null and i.revoked_at is null and i.expires_at>now() and o.deleted_at is null order by i.created_at desc`));
-  // A server-confirmed linked account contributes display metadata only.
-  const linkedRows = linkedAccountId ? (await db.execute(sql`
-    select o.id::text, o.name, m.role::text, u.email from memberships m
-    join organizations o on o.id=m.organization_id and o.deleted_at is null
-    join users u on u.id=m.user_id and u.deleted_at is null and not u.is_service
-    where m.user_id=${linkedAccountId}::uuid order by o.name,o.id`)).rows : [];
-  const linkedMemberships = linkedRows.flatMap(entry=>isRole(entry.role) ? [{
-    id:String(entry.id), name:String(entry.name), roleLabel:ROLE_LABELS[entry.role], email:String(entry.email),
-  }] : []);
-  return { actor: { id: actor.userId, name: actor.name, email: actor.email }, businesses, incoming, linkedMemberships,
+  // DISCOVERY ONLY, self-only. Verified links (migration 0062) and the legacy unverified Rana pair add
+  // read-only display rows for the signed-in person's OWN other sign-ins. Nothing here is consulted by
+  // scope(), uidMembers or any write, so a link can never grant access or reach a roster viewer.
+  const verified = await linksFor(actor.userId);
+  const sources: { id: string; source: "verified" | "legacy" }[] = [
+    ...verified.map(link => ({ id: link.userId, source: "verified" as const })),
+    ...(linkedAccountId && !verified.some(link => link.userId === linkedAccountId) ? [{ id: linkedAccountId, source: "legacy" as const }] : []),
+  ];
+  const linkedMemberships: { id: string; name: string; roleLabel: string; email: string; source: "verified" | "legacy" }[] = [];
+  for (const source of sources) {
+    const linkedRows = (await db.execute(sql`
+      select o.id::text, o.name, m.role::text, u.email from memberships m
+      join organizations o on o.id=m.organization_id and o.deleted_at is null
+      join users u on u.id=m.user_id and u.deleted_at is null and not u.is_service
+      where m.user_id=${source.id}::uuid order by o.name,o.id`)).rows;
+    for (const entry of linkedRows) if (isRole(entry.role)) linkedMemberships.push({
+      id: String(entry.id), name: String(entry.name), roleLabel: ROLE_LABELS[entry.role], email: String(entry.email), source: source.source });
+  }
+  const signIn = {
+    current: { id: actor.userId, email: actor.email, primary: verified.length === 0 || !verified.some(link => link.primary) },
+    alternates: verified.map(link => ({ id: link.userId, email: link.email, name: link.name, primary: link.primary, linkId: link.linkId })),
+  };
+  return { actor: { id: actor.userId, name: actor.name, email: actor.email }, businesses, incoming, linkedMemberships, signIn,
     roles: ROLES.map(value=>({value,label:ROLE_LABELS[value]})) };
 }
 export async function uidMembers(actor: UidActor, organizationId: string) {

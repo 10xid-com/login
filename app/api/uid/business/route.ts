@@ -2,9 +2,9 @@ import { authenticateUid } from "@/lib/uid/authenticate";
 import { MemberError, requiredClothingLevel } from "@/lib/uid/member-policy";
 import { clothingProxy } from "@/lib/uid/clothing-proxy";
 import { sendInvitation } from "@/lib/auth/mailer";
+import { LEGACY_RANA_HOST, isLegacyRanaAccount, isLegacyRanaPrimary, legacyLinkedAccount } from "@/lib/uid/legacy-rana-compat";
 import { businessId, uidOverview, uidMembers, uidChangeMember, uidInvite, uidRevokeInvite, uidAcceptInvite, uidClothingAccess } from "@/lib/db/uid-members";
 
-const RANA_ACCOUNTS=['bbb11aae-61de-4bdf-ae62-6be722ba9ab4','0145e895-4ea1-4d73-b692-e2b07c883875'];
 export const runtime='nodejs';
 const HEADERS={'cache-control':'no-store','x-content-type-options':'nosniff'};
 const json=(value:unknown,status=200)=>Response.json(value,{status,headers:HEADERS});
@@ -24,9 +24,7 @@ export async function POST(request:Request){
     const actor=await authenticateUid(request.headers.get('authorization'),input);
     const action=input.action;
     if(action==='overview'){
-      const linkedAccountId=input.host==='uid-rana.10xid.com'&&RANA_ACCOUNTS.includes(actor.userId)
-        ?RANA_ACCOUNTS.find(id=>id!==actor.userId):undefined;
-      return json(await uidOverview(actor,linkedAccountId));
+      return json(await uidOverview(actor,legacyLinkedAccount(input.host,actor.userId)));
     }
     if(action==='clothing-authorize'){
       const access=await uidClothingAccess(actor,typeof input.business==='string'?input.business:undefined);
@@ -38,13 +36,13 @@ export async function POST(request:Request){
     const business=businessId(input.business);
     if(action==='members'){
       const roster=await uidMembers(actor,business);
-      if(input.host!=='uid-rana.10xid.com'&&input.host!=='uid-ethan.10xid.com')return json(roster);
+      if(input.host!==LEGACY_RANA_HOST&&input.host!=='uid-ethan.10xid.com')return json(roster);
       let phones:Record<string,string>={};
       try{phones=JSON.parse(process.env.CONTACT_DIRECTORY_PHONES||'{}')||{};}catch{/* Optional contact data. */}
       const members=roster.members.map(member=>{
         const phone=phones[member.id];
-        const primary=member.id===RANA_ACCOUNTS[0];
-        const rana=RANA_ACCOUNTS.includes(member.id);
+        const primary=isLegacyRanaPrimary(member.id);
+        const rana=isLegacyRanaAccount(member.id);
         return {...member,...(typeof phone==='string'&&/^\d{3}-\d{3}-\d{4}$/.test(phone)?{contactPhone:phone}:{}),
           ...(rana?{contactGroup:{key:'rana',name:'Rana',primary}}:{})};
       });

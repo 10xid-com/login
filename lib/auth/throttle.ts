@@ -26,6 +26,7 @@ export const LIMITS = {
   reset: { ip: { window: 600, max: 20 }, subject: { window: 600, max: 10 } },
   setPassword: { ip: { window: 600, max: 20 }, subject: { window: 600, max: 5 } },
   changeEmail: { ip: { window: 600, max: 10 }, subject: { window: 3600, max: 5 } },
+  signinLink: { ip: { window: 600, max: 20 }, subject: { window: 900, max: 8 } },
   provider: { ip: { window: 600, max: 30 }, subject: { window: 600, max: 30 } },
   // Another site's server asking for its visitors (app/api/uid/password): the
   // address is that server's, shared by everyone signing in there.
