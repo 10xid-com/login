@@ -8,6 +8,7 @@ const ALL_CIDS='all-cids';
 const memberDate=new Intl.DateTimeFormat(undefined,{dateStyle:'medium'});
 let overview=null,business='',detail=null,roster=null,opened=false,busy=false,request=0,clothingBusiness='',editing=null,fetchingOverview=null,heldChannels=null;
 const directory=new Map(),loadedScripts=new Map();
+let contactProfiles=null,profileRequest=0;
 const stage=document.createElement('section');stage.id='membersStage';stage.hidden=true;stage.setAttribute('aria-label','Members');
 (document.querySelector('main')||document.body).append(stage);
 const inventories=document.createElement('section');inventories.id='inventoriesStage';inventories.hidden=true;inventories.setAttribute('aria-label','Inventories');
@@ -43,7 +44,7 @@ function markChannel(){
  for(const node of buttons)if(!heldChannels.some(item=>item.node===node))heldChannels.push({node,pressed:node.getAttribute('aria-pressed'),selected:node.classList.contains('selected')});
  for(const node of buttons){const selected=node.dataset.umBusiness===business;node.classList.toggle('selected',selected);node.setAttribute('aria-pressed',String(selected));}
 }
-function close(){opened=false;stage.hidden=true;document.body.classList.remove('members-open');editing=null;request++;
+function close(){opened=false;stage.hidden=true;document.body.classList.remove('members-open');editing=null;request++;profileRequest++;contactProfiles=null;
  if(heldChannels)for(const item of heldChannels){if(!item.node.isConnected)continue;item.node.classList.toggle('selected',item.selected);
   if(item.pressed===null)item.node.removeAttribute('aria-pressed');else item.node.setAttribute('aria-pressed',item.pressed);}
  heldChannels=null;
@@ -122,13 +123,46 @@ function received(){
  <button type="button" class="um-quiet" data-um="decline" data-id="${escape(invite.id)}" data-business="${escape(invite.business_id)}">Decline</button></div></div>`).join('')}</div></section>`;
 }
 function roleLabel(role){return overview?.roles.find(option=>option.value===role)?.label||({staff:'Staff (legacy)',member:'Member (legacy)'}[role])||role;}
+function profileContent(id,name,email){
+ const profile=contactProfiles?.get(id);
+ const displayName=profile?.name||name||email;
+ const displayEmail=profile?.email||email;
+ const heading=`<strong>${escape(displayName)}${id===overview?.actor.id?' <span class="um-you">You</span>':''}</strong>
+ ${displayEmail!==displayName?`<small>${escape(displayEmail)}</small>`:''}`;
+ if(!profile)return heading;
+ const memberships=profile.memberships.map(m=>m.ciD.name+' · '+m.role+(m.signIn?' ('+m.signIn+')':'')).sort().join(', ');
+ const deckCiDs=[...new Set(profile.sources.map(s=>s.ciD.name).filter(Boolean))].sort().join(', ');
+ return heading+`<small><strong>CiD memberships</strong> · ${escape(memberships)}</small>
+ <small><strong>Work Deck CiDs</strong> · ${escape(deckCiDs||'None visible')}</small>
+ ${profile.sources.length?`<details><summary>Work Deck contact details</summary>${profile.sources.map(({contact:c,ciD,deck:d})=>`<div>
+  <a href="#work-deck-${escape(d.id)}" data-um="open-work-deck" data-id="${escape(d.id)}">${escape(d.title||'Open Work Deck')}</a>
+  <small>${escape([ciD.name,c.role||(c.vendor?'Vendor contact':'Client contact'),c.vendor?d.vendor:''].filter(Boolean).join(' · '))}</small>
+  ${c.email?`<small>Email · ${escape(c.email)}</small>`:''}
+  ${c.phone?`<small>Phone · ${escape(c.phone)}${c.extension?' · Ext. '+escape(c.extension):''}</small>`:''}
+  ${c.mobile?`<small>Mobile · ${escape(c.mobile)}</small>`:''}
+  ${c.vendor&&d.vendorAddress?`<small>${escape(d.vendorAddress)}</small>`:''}
+ </div>`).join('')}</details>`:''}`;
+}
+function refreshContactProfiles(){
+ const loadProfiles=root.WorkDeck?.contactProfiles;
+ if(!loadProfiles)return;
+ const ticket=++profileRequest;
+ contactProfiles=null;
+ loadProfiles().then(profiles=>{
+  if(!opened||ticket!==profileRequest)return;
+  contactProfiles=profiles;
+  for(const node of stage.querySelectorAll('[data-member-profile]')){
+   const id=node.dataset.memberProfile;
+   if(profiles.has(id))node.innerHTML=profileContent(id);
+  }
+ }).catch(()=>{});
+}
 function memberRow(member,company,editable){
- const name=member.name||member.email;
  const dates=[['Assigned',member.assignedAt],['Updated',member.updatedAt]]
   .filter(([,value])=>value&&Number.isFinite(Date.parse(value)))
   .map(([label,value])=>label+' '+memberDate.format(new Date(value))).join(' · ');
- return `<div class="um-row"><div class="um-person"><strong>${escape(name)}${member.id===overview.actor.id?' <span class="um-you">You</span>':''}</strong>
- ${member.email!==name?`<small>${escape(member.email)}</small>`:''}<div class="um-tags"><span>CiD · ${escape(company.business.name)}</span><span>${escape(roleLabel(member.role))}</span>${company.clothingAvailable?`<span>Clothing · ${escape(levels[member.clothing])}</span>`:''}</div>
+ return `<div class="um-row"><div class="um-person"><div data-member-profile="${escape(member.id)}">${profileContent(member.id,member.name,member.email)}</div>
+ <div class="um-tags"><span>CiD · ${escape(company.business.name)}</span><span>${escape(roleLabel(member.role))}</span>${company.clothingAvailable?`<span>Clothing · ${escape(levels[member.clothing])}</span>`:''}</div>
  ${dates?`<small>${escape(dates)}</small>`:''}</div>
  ${editable&&member.canEdit?`<button type="button" class="um-quiet" data-um="edit" data-id="${escape(member.id)}">Edit access</button>`:''}</div>`;
 }
@@ -159,7 +193,7 @@ function render(){
 }
 async function open(options={}){
  root.showHome?.();root.VendorUI?.close?.();root.InventoryUI?.leave?.();root.ClothingUI?.leave?.();root.WorkDeck?.close?.();root.TaskUI?.closeCard?.();
- opened=true;stage.hidden=false;document.body.classList.add('members-open');detail=null;roster=null;render();
+ opened=true;stage.hidden=false;document.body.classList.add('members-open');detail=null;roster=null;render();refreshContactProfiles();
  try{await refreshOverview();business=options.business||selectedBusiness();await load();if(options.invite&&detail?.canManage)inviteForm();}
  catch(error){render();notice(error.message,true);}
 }
@@ -205,7 +239,7 @@ async function run(operation){
   stage.querySelectorAll('button,input,select').forEach(node=>node.disabled=false);
   const form=$('membersEditForm');if(form?.elements.clothing&&form.elements.role.value==='owner')form.elements.clothing.disabled=true;}
 }
-async function changed(message){await refreshOverview();await load();notice(message);}
+async function changed(message){refreshContactProfiles();await refreshOverview();await load();notice(message);}
 stage.addEventListener('submit',event=>{
  event.preventDefault();const form=event.target;
  if(form.id==='membersInviteForm'){const input={email:form.elements.email.value,role:form.elements.role.value};return run(async()=>{
@@ -215,7 +249,8 @@ stage.addEventListener('submit',event=>{
 });
 stage.addEventListener('click',event=>{
  const button=event.target.closest('[data-um]');if(!button||busy)return;const action=button.dataset.um;
- if(action==='home')return root.showHome?.();if(action==='refresh')return run(async()=>{await refreshOverview();await load();});
+ if(action==='home')return root.showHome?.();if(action==='refresh')return run(async()=>{refreshContactProfiles();await refreshOverview();await load();});
+ if(action==='open-work-deck'){event.preventDefault();close();return root.WorkDeck?.open({deckId:button.dataset.id});}
  if(action==='open-cid'){business=button.dataset.business;return load();}
  if(action==='invite')return inviteForm();if(action==='edit')return editForm(button.dataset.id);
  if(action==='cancel-edit'){editing=null;$('membersEditor').replaceChildren();return;}
@@ -297,6 +332,6 @@ function applyClothingAccess(){
 const clothesObserver=new MutationObserver(applyClothingAccess);clothesObserver.observe(document.querySelector('main')||document.body,{childList:true,subtree:true});
 root.UIDMembers={open,close,openClothing,openInventories,toolUrl(path){const url=new URL(path,location.origin);if(clothingBusiness)url.searchParams.set('business',clothingBusiness);return url.pathname+url.search;}};
 reconcile();refreshOverview().catch(()=>{});
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshOverview().then(()=>{applyClothingAccess();if(opened)load();}).catch(()=>{});});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshOverview().then(()=>{applyClothingAccess();if(opened){refreshContactProfiles();load();}}).catch(()=>{});});
 root.setInterval(()=>{if(!document.hidden)refreshOverview().then(applyClothingAccess).catch(()=>{});},30000);
 })(window);
