@@ -111,6 +111,18 @@ export const PAGES: PageRecord[] = [
   { id: "uid.tool-assets", path: "/api/uid/assets", name: "UiD tool assets",
     purpose: "Shared membership interface code is public; private inventory code requires an authorized UiD server.",
     audience: "public", kind: "machinery", file: "app/api/uid/assets/route.ts", methods: ["GET"], group: "Machinery" },
+  { id: "pid.my-work", path: "/auth/pid/my-work", name: "My Work",
+    purpose: "A signed-in person sees the shared decks they are entitled to across their businesses.",
+    audience: "member", kind: "page", file: "app/auth/pid/my-work/page.tsx", group: "The work" },
+  { id: "pid.my-work-deck", path: "/auth/pid/my-work/[deck]", name: "My Work deck",
+    purpose: "One shared deck and its stages, shown only to a signed-in person entitled to it.",
+    audience: "member", kind: "page", file: "app/auth/pid/my-work/[deck]/page.tsx", group: "The work" },
+  { id: "pid.my-work-card-content", path: "/api/pid/my-work/[deck]/cards/[card]/content", name: "My Work card content",
+    purpose: "Returns a selected card's content to a signed-in person entitled to that deck.",
+    audience: "member", kind: "machinery", file: "app/api/pid/my-work/[deck]/cards/[card]/content/route.ts", methods: ["GET"], group: "Machinery" },
+  { id: "pid.my-work-card-file", path: "/api/pid/my-work/[deck]/cards/[card]/content/files/[file]", name: "My Work card file",
+    purpose: "Returns one file attached to a selected card to a signed-in person entitled to that deck.",
+    audience: "member", kind: "machinery", file: "app/api/pid/my-work/[deck]/cards/[card]/content/files/[file]/route.ts", methods: ["GET"], group: "Machinery" },
 
   /* -------------------------------------------------------------- */
   /* Getting in                                                      */
