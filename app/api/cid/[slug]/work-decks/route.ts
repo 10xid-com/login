@@ -16,6 +16,9 @@ const privateHeaders = {
 };
 
 export async function GET(request: Request, {params}: {params: Promise<{slug: string}>}) {
+  if (process.env.RAILWAY_ENVIRONMENT_NAME === 'pilot-staging') {
+    return Response.json({error: 'Company workspace not found.'}, {status: 404, headers: privateHeaders});
+  }
   const {slug} = await params;
   if (slug !== company || request.headers.get('origin') !== companyOrigin) {
     return Response.json({error: 'Company workspace not found.'}, {status: 404, headers: privateHeaders});
