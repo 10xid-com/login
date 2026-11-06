@@ -45,7 +45,7 @@ export function clothingConfiguredFor(slug: string): boolean {
   return slug === (process.env.CLOTHING_BUSINESS_SLUG || "tbox-studio") &&
     Boolean(process.env.CLOTHING_API_URL && (process.env.CLOTHING_API_KEY || "").length >= 32);
 }
-export async function uidOverview(actor: UidActor) {
+export async function uidOverview(actor: UidActor, linkedAccountId?: string) {
   const memberships = await db.execute(sql`select o.id::text,o.name,o.slug,m.role::text from memberships m
     join organizations o on o.id=m.organization_id and o.deleted_at is null where m.user_id=${actor.userId}::uuid order by o.name,o.id`);
   const businesses = [];
