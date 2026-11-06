@@ -28,8 +28,9 @@
  * Must be absent: everything the runner forbids except BETTER_AUTH_SECRET, plus
  * the runner's own role passwords. No mail transport is touched or required.
  * Refuses to run if any real sign-in identity exists (an auth_users row, or a
- * portal user bound to one) outside @rehearsal.invalid. Unbound users that the
- * migrations themselves seed are left untouched.
+ * portal user bound to one) outside @rehearsal.invalid. Before inserting, the
+ * unbound contacts the migrations seed (matched by address hash) are anonymized
+ * and soft-deleted; any other non-synthetic user makes it refuse.
  */
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -51,6 +52,92 @@ export const PEOPLE = Object.freeze([
   { key: "alternate", org: "pilot-vinyl", role: "manager", name: "Pilot Alternate", uid: "00000000-0000-4000-8000-0000000b0003", aid: "pilot-fixture-auth-alternate" },
   { key: "outside", org: "pilot-vinyl", role: "member", name: "Pilot Outside", uid: "00000000-0000-4000-8000-0000000b0004", aid: "pilot-fixture-auth-outside" },
 ].map((p) => ({ ...p, email: `pilot.${p.key}@${DOMAIN}` })));
+
+/**
+ * Contacts the migrations themselves seed. Their ids are random per database, so
+ * they are matched by the SHA-256 of the lower-cased primary address (no real
+ * address is stored here). They carry no sign-in identity.
+ */
+export const LEGACY_EMAIL_SHA256 = Object.freeze([
+  "72fd3a99c6bd31525950060d159599da0094ee4f41a1df749ca9e87d4ed1979b",
+  "9d4d6b6b12aae503ef6b667dfd861ecf8aebd39f5bcf70d460757d2f19f83efd",
+  "a73f7435971c90008d5902d876490ac15948c93bccedd9e2af7e1144398b6cbc",
+  "bd8a0d2a5b5f4e67dd95e7797ecee64011b4eda7395c20a3336754f82c1f49e7",
+  "da8eaf1a8281febac225134c209f451f48f0d4bca16e7b764add7cdfdd425ac6",
+  "e6f33b2a4a1d835d25ca7b9b777a2a177353b0afc97e281b31665519243d3d03",
+  "ebf4ea6c5a51faceda0abae9778014d1db94b57b228e1f3f947df78ecf44d748",
+  "f337f6d73a779a1c29ac7c3b36de269658f7d838f68fc4599bbca512f131ec9d",
+]);
+/** Public-profile slugs the migrations seed with a real contact address. */
+export const LEGACY_PROFILE_SLUGS = Object.freeze(["brandingcentres", "vinylwraptoronto", "wrapauthority", "workweartoronto"]);
+const sha = (col) => `encode(sha256(convert_to(lower(${col}), 'UTF8')), 'hex')`;
+// An address not already on the synthetic domain.
+const REAL_EMAIL_RE = "[A-Za-z0-9._%+-]+@(?!rehearsal[.]invalid)[A-Za-z0-9.-]+";
+// A live row in any of these means a migration contact is in use: refuse.
+const LEGACY_DEPENDENTS = Object.freeze([
+  ["sessions", "user_id"], ["identities", "user_id"], ["identity_bindings", "user_id"], ["recovery_codes", "user_id"],
+  ["sso_tickets", "user_id"], ["api_keys", "created_by"], ["api_keys", "service_user_id"], ["invitations", "invited_by"],
+  ["signin_links", "user_low"], ["signin_links", "user_high"],
+]);
+
+/**
+ * Runs inside the seed transaction, before any synthetic insert. Refuses unless
+ * every non-synthetic user is exactly a known migration contact with no sign-in
+ * identity or credential and no dependent session/key/invitation/link. Then it
+ * anonymizes only those rows (address -> legacy-<hash8>@rehearsal.invalid, name
+ * neutral, soft-deleted, memberships removed) and scrubs their addresses from
+ * user_emails, audit targets and the seeded public profiles. Nothing is deleted
+ * from users or audit, so every foreign key still resolves. Returns counts only.
+ * Idempotent: a second run matches no non-synthetic user.
+ */
+export async function anonymizeLegacyContacts(client) {
+  const unknown = await client.query(
+    `select count(*)::int n from users where email not like '%@${DOMAIN}' and ${sha("email")} <> all($1::text[])`,
+    [LEGACY_EMAIL_SHA256],
+  );
+  if (unknown.rows[0].n !== 0) fail("users exist outside the known migration contacts and @rehearsal.invalid");
+  const bound = await client.query(
+    `select count(*)::int n from users where email not like '%@${DOMAIN}'
+       and (auth_user_id is not null or workos_user_id is not null or totp_secret is not null or password_hash is not null)`,
+  );
+  if (bound.rows[0].n !== 0) fail("a migration contact has a sign-in identity or credential");
+  const ids = (await client.query(`select id from users where email not like '%@${DOMAIN}'`)).rows.map((r) => r.id);
+  for (const [t, c] of LEGACY_DEPENDENTS) {
+    const r = await client.query(`select count(*)::int n from ${t} where ${c} = any($1::uuid[])`, [ids]);
+    if (r.rows[0].n !== 0) fail(`a migration contact is referenced by live ${t}`);
+  }
+  const stat = { users: ids.length, memberships: 0, emails: 0, audit: 0, profiles: 0 };
+  if (ids.length > 0) {
+    stat.memberships = (await client.query("delete from role where user_id = any($1::uuid[])", [ids])).rowCount;
+    stat.emails = (
+      await client.query(
+        `update user_emails set email = 'legacy-' || left(${sha("email")}, 8) || '@${DOMAIN}', verified_at = null
+         where user_id = any($1::uuid[])`,
+        [ids],
+      )
+    ).rowCount;
+    await client.query(
+      `update users set email = 'legacy-' || left(${sha("email")}, 8) || '@${DOMAIN}', full_name = 'Legacy Contact (synthetic)',
+         is_staff = false, deleted_at = coalesce(deleted_at, now()), updated_at = now()
+       where id = any($1::uuid[])`,
+      [ids],
+    );
+  }
+  stat.audit = (
+    await client.query(
+      `update audit_events set target = regexp_replace(target, '${REAL_EMAIL_RE}', 'redacted@${DOMAIN}', 'g')
+       where target ~ '${REAL_EMAIL_RE}'`,
+    )
+  ).rowCount;
+  stat.profiles = (
+    await client.query(
+      `update cid_public_profiles set profile = jsonb_set(profile, '{email}', to_jsonb('contact@${DOMAIN}'::text))
+       where slug = any($1::text[]) and profile ? 'email' and profile->>'email' not like '%@${DOMAIN}'`,
+      [LEGACY_PROFILE_SLUGS],
+    )
+  ).rowCount;
+  return stat;
+}
 
 const RUNNER_ONLY = ["PILOT_APP_PASSWORD", "PILOT_AUTH_PASSWORD", "PILOT_DB_REHEARSAL_TEST_ONLY"];
 const fail = (m) => {
@@ -86,6 +173,7 @@ export async function seed(client, { password, totp, secret }) {
             + (select count(*)::int from auth_users where email not like '%@${DOMAIN}') n`,
     );
     if (stray.rows[0].n !== 0) fail("database already holds real sign-in identities outside @rehearsal.invalid");
+    const cleaned = await anonymizeLegacyContacts(client);
 
     for (const o of ORGS) {
       await client.query(
@@ -135,6 +223,7 @@ export async function seed(client, { password, totp, secret }) {
       await client.query("update organizations set owner_user_id = $1 where id = $2", [owner.uid, o.id]);
     }
     await client.query("commit");
+    return cleaned;
   } catch (e) {
     await client.query("rollback").catch(() => {});
     throw e;
@@ -150,7 +239,8 @@ async function main() {
     const journal = JSON.parse(readFileSync("drizzle/meta/_journal.json", "utf8")).entries;
     const { rows } = await client.query("select count(*)::int n from drizzle.__drizzle_migrations");
     if (rows[0].n !== journal.length) fail("migrations are not fully applied; run pilot:db-rehearsal first");
-    await seed(client, inputs);
+    const c = await seed(client, inputs);
+    console.log(`anonymized legacy contacts: users=${c.users} memberships=${c.memberships} emails=${c.emails} audit=${c.audit} profiles=${c.profiles}`);
   } finally {
     await client.end().catch(() => {});
   }

@@ -73,3 +73,40 @@ refuses((e) => (e.PILOT_FIXTURE_TOTP_SECRET = "bad secret!"), /TOTP/);
 refuses((e) => delete e.BETTER_AUTH_SECRET, /BETTER_AUTH_SECRET/);
 refuses((e) => (e.BETTER_AUTH_SECRET = "short"), /BETTER_AUTH_SECRET/);
 refuses((e) => (e.PILOT_FIXTURE_PASSWORD = "ownerpw-ownerpw-ownerpw".slice(0, 12) && "ownerpw"), /PASSWORD/);
+
+import { anonymizeLegacyContacts, LEGACY_EMAIL_SHA256, LEGACY_PROFILE_SLUGS } from "./pilot-staging-fixtures.mjs";
+/** Fake pg client: answers the n-count guards in order, records every statement. */
+const fakeClient = (counts) => {
+  const log = [];
+  let i = 0;
+  return {
+    log,
+    async query(sql) {
+      log.push(sql);
+      if (/select count\(\*\)::int n/.test(sql)) return { rows: [{ n: counts[i++] ?? 0 }] };
+      if (/select id from users/.test(sql)) return { rows: [{ id: "00000000-0000-4000-8000-000000000001" }] };
+      return { rows: [], rowCount: 0 };
+    },
+  };
+};
+const mutates = (log) => log.some((s) => /^\s*(update|delete|insert)/i.test(s));
+test("legacy contact hashes: eight distinct sha256 digests, no plaintext", () => {
+  assert.equal(new Set(LEGACY_EMAIL_SHA256).size, 8);
+  for (const h of LEGACY_EMAIL_SHA256) assert.match(h, /^[0-9a-f]{64}$/);
+  assert.equal(LEGACY_PROFILE_SLUGS.length, 4);
+});
+test("cleanup refuses an unknown non-synthetic user before changing anything", async () => {
+  const c = fakeClient([1]);
+  await assert.rejects(anonymizeLegacyContacts(c), /outside the known migration contacts/);
+  assert.equal(mutates(c.log), false);
+});
+test("cleanup refuses a migration contact that holds a sign-in identity", async () => {
+  const c = fakeClient([0, 1]);
+  await assert.rejects(anonymizeLegacyContacts(c), /sign-in identity or credential/);
+  assert.equal(mutates(c.log), false);
+});
+test("cleanup refuses a migration contact referenced by a live session/key", async () => {
+  const c = fakeClient([0, 0, 1]);
+  await assert.rejects(anonymizeLegacyContacts(c), /referenced by live sessions/);
+  assert.equal(mutates(c.log), false);
+});

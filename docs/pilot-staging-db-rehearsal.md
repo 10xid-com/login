@@ -27,6 +27,13 @@ exact private host, `ci_owner`, `portal_ci`) with its own flag `PILOT_FIXTURES_T
 set to `I_UNDERSTAND_THIS_IS_TEST_ONLY`. It refuses if the runner's flag or role passwords
 are set, and refuses if any non-`@rehearsal.invalid` sign-in identity already exists.
 
+Before inserting, in the same transaction, it anonymizes the eight contacts the migrations seed
+(matched by SHA-256 of the address, no sign-in identity): soft-deleted, renamed to
+`legacy-<hash8>@rehearsal.invalid`, memberships removed, and their addresses scrubbed from
+`user_emails`, `audit_events.target` and the seeded public-profile `email`. It refuses (no changes)
+if any other non-synthetic user exists, a contact has an identity/credential, or a session, key,
+invitation or sign-in link references one. Counts only are printed; a re-run changes nothing.
+
 Inputs (names only, values never printed): `PILOT_FIXTURE_PASSWORD` (12-128 chars),
 `PILOT_FIXTURE_TOTP_SECRET` (20-64 letters/digits; the raw secret the app stores, shown to
 authenticator apps in base32), `BETTER_AUTH_SECRET` (must equal the pilot login service's
