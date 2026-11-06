@@ -133,7 +133,7 @@ function profileContent(id,name,email){
  const memberships=profile.memberships.map(m=>m.ciD.name+' · '+m.role+(m.signIn?' ('+m.signIn+')':'')).sort().join(', ');
  const deckCiDs=[...new Set(profile.sources.map(s=>s.ciD.name).filter(Boolean))].sort().join(', ');
  return heading+`<small><strong>CiD memberships</strong> · ${escape(memberships)}</small>
- <small><strong>Work Deck CiDs</strong> · ${escape(deckCiDs||'None visible')}</small>
+ <small><strong>Listed as a contact for</strong> · ${escape(deckCiDs||'No Work Deck contact records')}</small>
  ${profile.sources.length?`<details><summary>Work Deck contact details</summary>${profile.sources.map(({contact:c,ciD,deck:d})=>`<div>
   <a href="#work-deck-${escape(d.id)}" data-um="open-work-deck" data-id="${escape(d.id)}">${escape(d.title||'Open Work Deck')}</a>
   <small>${escape([ciD.name,c.role||(c.vendor?'Vendor contact':'Client contact'),c.vendor?d.vendor:''].filter(Boolean).join(' · '))}</small>
