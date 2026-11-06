@@ -31,7 +31,20 @@ export async function POST(request:Request){
     }
     if(action==='clothing')return await clothingProxy(actor,input as Parameters<typeof clothingProxy>[1]);
     const business=businessId(input.business);
-    if(action==='members')return json(await uidMembers(actor,business));
+    if(action==='members'){
+      const roster=await uidMembers(actor,business);
+      if(input.host!=='uid-rana.10xid.com'&&input.host!=='uid-ethan.10xid.com')return json(roster);
+      let phones:Record<string,string>={};
+      try{phones=JSON.parse(process.env.CONTACT_DIRECTORY_PHONES||'{}')||{};}catch{/* Optional contact data. */}
+      const members=roster.members.map(member=>{
+        const phone=phones[member.id];
+        const primary=member.id==='bbb11aae-61de-4bdf-ae62-6be722ba9ab4';
+        const rana=primary||member.id==='0145e895-4ea1-4d73-b692-e2b07c883875';
+        return {...member,...(typeof phone==='string'&&/^\d{3}-\d{3}-\d{4}$/.test(phone)?{contactPhone:phone}:{}),
+          ...(rana?{contactGroup:{key:'rana',name:'Rana',primary}}:{})};
+      });
+      return json({...roster,members});
+    }
     if(action==='change'||action==='remove'){
       const data=input.member as Parameters<typeof uidChangeMember>[2];
       if(!data||typeof data!=='object')throw new MemberError('Select a member.',422);
