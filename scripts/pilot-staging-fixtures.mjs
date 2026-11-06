@@ -139,6 +139,65 @@ export async function anonymizeLegacyContacts(client) {
   return stat;
 }
 
+/**
+ * Organizations the migrations seed (0012, 0059), by exact slug. Slugs and ids stay (they carry
+ * the relations); only the display label is replaced. The synthetic pilot-* orgs are exempt.
+ */
+export const LEGACY_ORG_SLUGS = Object.freeze([
+  "tbox-studio", "vinyl-wrap-toronto", "branding-centres", "rotary-store",
+  "workwear-toronto", "416print", "print-three", "10xid", "wrap-authority",
+]);
+/** Public profiles seeded by 0059/0060 (the table CHECK allows only these five slugs). */
+export const SEEDED_PROFILE_SLUGS = Object.freeze(["rotary", "brandingcentres", "vinylwraptoronto", "wrapauthority", "workweartoronto"]);
+const SYNTH_PHONE = "+1 555-010-0100";
+const SYNTH_ADDRESS = "1 Example Street, Example City (synthetic)";
+/**
+ * Jobs (0032) are deliberately NOT rewritten: their three titles are generic "TEST: ..." strings
+ * (vehicle/film wording, no person or place) and job_events only records "migration 0032".
+ *
+ * Runs in the seed transaction. Refuses (no changes) if an organization outside the migration-seeded
+ * slugs and the pilot-* fixtures exists. Then replaces the seeded organization names, the profile
+ * display name / phone / address / maps link / email, and the one audit target that names an
+ * organization. Nothing is deleted; ids, slugs, memberships and relations are untouched.
+ * Idempotent. Returns counts only.
+ */
+export async function anonymizeLegacyBusinessData(client) {
+  const pilot = ORGS.map((o) => o.slug);
+  const unknown = await client.query(
+    "select count(*)::int n from organizations where slug <> all($1::text[]) and slug <> all($2::text[])",
+    [LEGACY_ORG_SLUGS, pilot],
+  );
+  if (unknown.rows[0].n !== 0) fail("organizations exist outside the known migration seeds and the pilot fixtures");
+  const stat = { organizations: 0, profiles: 0, audit: 0 };
+  stat.organizations = (
+    await client.query(
+      `update organizations set name = 'Legacy Org ' || left(encode(sha256(convert_to(slug, 'UTF8')), 'hex'), 8) || ' (synthetic)'
+       where slug = any($1::text[]) and name <> 'Legacy Org ' || left(encode(sha256(convert_to(slug, 'UTF8')), 'hex'), 8) || ' (synthetic)'`,
+      [LEGACY_ORG_SLUGS],
+    )
+  ).rowCount;
+  stat.profiles = (
+    await client.query(
+      `update cid_public_profiles set profile =
+         (profile - 'mapsUrl')
+         || jsonb_build_object('displayName', 'Legacy Profile (synthetic)')
+         || case when profile ? 'phone' then jsonb_build_object('phone', '${SYNTH_PHONE}') else '{}'::jsonb end
+         || case when profile ? 'address' then jsonb_build_object('address', '${SYNTH_ADDRESS}') else '{}'::jsonb end
+         || case when profile ? 'email' then jsonb_build_object('email', 'contact@${DOMAIN}') else '{}'::jsonb end
+       where slug = any($1::text[])
+         and (profile ? 'mapsUrl' or profile->>'displayName' is distinct from 'Legacy Profile (synthetic)'
+           or (profile ? 'phone' and profile->>'phone' <> '${SYNTH_PHONE}')
+           or (profile ? 'address' and profile->>'address' <> '${SYNTH_ADDRESS}')
+           or (profile ? 'email' and profile->>'email' <> 'contact@${DOMAIN}'))`,
+      [SEEDED_PROFILE_SLUGS],
+    )
+  ).rowCount;
+  stat.audit = (
+    await client.query("update audit_events set target = 'Legacy Org (0059, CiD rollout)' where target = 'Wrap Authority (0059, CiD rollout)'")
+  ).rowCount;
+  return stat;
+}
+
 const RUNNER_ONLY = ["PILOT_APP_PASSWORD", "PILOT_AUTH_PASSWORD", "PILOT_DB_REHEARSAL_TEST_ONLY"];
 const fail = (m) => {
   throw new GateError(`pilot fixtures refused: ${m}`);
@@ -174,6 +233,7 @@ export async function seed(client, { password, totp, secret }) {
     );
     if (stray.rows[0].n !== 0) fail("database already holds real sign-in identities outside @rehearsal.invalid");
     const cleaned = await anonymizeLegacyContacts(client);
+    Object.assign(cleaned, { business: await anonymizeLegacyBusinessData(client) });
 
     for (const o of ORGS) {
       await client.query(
@@ -241,6 +301,7 @@ async function main() {
     if (rows[0].n !== journal.length) fail("migrations are not fully applied; run pilot:db-rehearsal first");
     const c = await seed(client, inputs);
     console.log(`anonymized legacy contacts: users=${c.users} memberships=${c.memberships} emails=${c.emails} audit=${c.audit} profiles=${c.profiles}`);
+    console.log(`anonymized legacy business data: organizations=${c.business.organizations} profiles=${c.business.profiles} audit=${c.business.audit}`);
   } finally {
     await client.end().catch(() => {});
   }

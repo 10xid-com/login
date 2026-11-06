@@ -55,3 +55,13 @@ owner. Explicit grants to named roles are never touched (compared before/after).
 Expected policy: no PUBLIC EXECUTE on any SECURITY DEFINER function in `public`; `portal_app` may
 SELECT `public.role` / `public.memberships` (0061, derives CiD scope); `portal_auth` is denied both;
 `jobs` is RLS-isolated (0 rows unscoped). No production migration was added.
+
+## Business-data anonymization in the fixture seed
+
+Same transaction, after the contact scrub. Refuses (no changes) if an organization exists whose slug
+is neither a migration-seeded slug (0012/0059) nor a `pilot-*` fixture. Then, by exact slug only:
+organization names become `Legacy Org <hash8> (synthetic)` (ids, slugs, memberships untouched);
+the five seeded public profiles (0059/0060) get a synthetic display name, phone, address and
+email and lose the maps link; the one audit target naming an organization is neutralised. Nothing
+is deleted. Jobs (0032) are left as-is: three generic `TEST:` titles with no person or place.
+Prints counts only (`anonymized legacy business data: ...`).

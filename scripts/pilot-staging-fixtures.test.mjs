@@ -110,3 +110,23 @@ test("cleanup refuses a migration contact referenced by a live session/key", asy
   await assert.rejects(anonymizeLegacyContacts(c), /referenced by live sessions/);
   assert.equal(mutates(c.log), false);
 });
+
+import { anonymizeLegacyBusinessData, LEGACY_ORG_SLUGS, SEEDED_PROFILE_SLUGS } from "./pilot-staging-fixtures.mjs";
+test("business cleanup refuses an unknown organization before changing anything", async () => {
+  const c = fakeClient([1]);
+  await assert.rejects(anonymizeLegacyBusinessData(c), /outside the known migration seeds/);
+  assert.equal(mutates(c.log), false);
+});
+test("business cleanup only updates (never deletes), by exact slug, and keeps the relations", async () => {
+  const c = fakeClient([0]);
+  const stat = await anonymizeLegacyBusinessData(c);
+  assert.deepEqual(Object.keys(stat), ["organizations", "profiles", "audit"]);
+  const writes = c.log.filter((s) => /^\s*(update|delete|insert)/i.test(s));
+  assert.equal(writes.length, 3);
+  for (const w of writes) assert.match(w, /^\s*update /i);
+  assert.match(writes[0], /update organizations set name = /);
+  assert.doesNotMatch(writes[0], /slug =\s*'|set slug|\bid\b\s*=/);
+  assert.equal(LEGACY_ORG_SLUGS.length, 9);
+  assert.equal(SEEDED_PROFILE_SLUGS.length, 5);
+  assert.doesNotMatch(c.log.join("\n"), /Ronson|M9W|416-|647-/);
+});
