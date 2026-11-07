@@ -37,7 +37,7 @@ LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
-BEGIN ATOMIC
+AS $query$
   SELECT member.id, nullif(btrim(profile.name), '')
     FROM %1$s AS assignment
     JOIN %2$s AS company ON company.id = assignment.organization_id
@@ -62,7 +62,7 @@ BEGIN ATOMIC
           AND actor.deleted_at IS NULL
           AND NOT actor.is_service
      );
-END;
+$query$;
   $definition$, VARIADIC relations);
 END;
 $migration$;
