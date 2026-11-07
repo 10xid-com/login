@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { expect, test } from "vitest";
 
-test.each(["original tables", "compatibility views"])(
+test.each(["original tables", "compatibility views", "separate identity schemas"])(
   "Work Deck names follow PiDs and CiD roster visibility with %s", async (layout) => {
     const db = new PGlite();
     try {
@@ -51,8 +51,19 @@ test.each(["original tables", "compatibility views"])(
           CREATE VIEW memberships WITH (security_invoker = true) AS SELECT * FROM "role";
         `);
       }
+      if (layout === "separate identity schemas") {
+        await db.exec(`
+          CREATE SCHEMA identity;
+          CREATE SCHEMA auth;
+          ALTER TABLE users SET SCHEMA identity;
+          ALTER TABLE auth_users SET SCHEMA auth;
+        `);
+      }
       const migration = await readFile(new URL("../drizzle/0062_work_deck_pid_names.sql", import.meta.url), "utf8");
       await db.exec(migration);
+      if (layout === "separate identity schemas") {
+        await db.exec("SET search_path = public, identity, auth");
+      }
 
       const names = () => db.query("SELECT * FROM public.work_deck_pid_names() ORDER BY user_id");
       const scope = (companyId: string, actorId: string) => db.query(
@@ -78,7 +89,7 @@ test.each(["original tables", "compatibility views"])(
       expect((await names()).rows).toEqual([...closedRoster, viewerName]);
       await scope(company, member);
       expect((await names()).rows).toEqual(closedRoster);
-      expect((await db.query("SELECT has_table_privilege('public.auth_users', 'SELECT') AS allowed")).rows)
+      expect((await db.query("SELECT has_table_privilege(oid, 'SELECT') AS allowed FROM pg_catalog.pg_class WHERE relname = 'auth_users'")).rows)
         .toEqual([{ allowed: false }]);
       await scope(company, outside);
       expect((await names()).rows).toEqual([]);
