@@ -57,5 +57,7 @@ export async function clothingProxy(actor:UidActor,input:{business?:string;metho
   const contentType=response.headers.get('content-type')||'application/json';
   if(!/^(application\/json|image\/(jpeg|png|webp))(;|$)/i.test(contentType))throw new MemberError('The inventory connection returned an unexpected response.',502);
   if(response.status===401||response.status===403)throw new MemberError('The inventory connection needs attention.',503);
-  return new Response(method==='HEAD'?null:response.body,{status:response.status,headers:{'content-type':contentType,'cache-control':'private, no-store','x-content-type-options':'nosniff'}});
+  // A clothing photo id always names the same bytes, so its private browser caching is kept; nothing else is cached.
+  const cache=response.headers.get('cache-control')||'',keep=response.ok&&/^image\//i.test(contentType)&&/^private, max-age=\d{1,8}, immutable$/.test(cache);
+  return new Response(method==='HEAD'?null:response.body,{status:response.status,headers:{'content-type':contentType,'cache-control':keep?cache:'private, no-store','x-content-type-options':'nosniff'}});
 }

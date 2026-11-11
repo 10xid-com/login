@@ -29,6 +29,17 @@ describe('server-side Clothing Inventory enforcement',()=>{
   expect(String(upstream.mock.calls[0][0])).toBe('https://clothing.example.com/api/clothing/C001');
   expect(upstream.mock.calls[0][1].headers['x-clothing-actor']).toBe(actor.email);
  });
+ it('lets the browser keep a photo (and its thumbnail) but never inventory data',async()=>{
+  const cache='private, max-age=2592000, immutable';
+  const photo=vi.fn().mockResolvedValue(new Response(new Uint8Array([255,216,255]),{headers:{'content-type':'image/jpeg','cache-control':cache}}));
+  const kept=await clothingProxy(actor,{path:'/api/clothing/INV001/photos/IMG001?size=thumb',method:'GET'},photo);
+  expect(kept.headers.get('cache-control')).toBe(cache);
+  expect(String(photo.mock.calls[0][0])).toBe('https://clothing.example.com/api/clothing/INV001/photos/IMG001?size=thumb');
+  const data=vi.fn().mockResolvedValue(Response.json({items:[]},{headers:{'cache-control':cache}}));
+  expect((await clothingProxy(actor,{path:'/api/clothing',method:'GET'},data)).headers.get('cache-control')).toBe('private, no-store');
+  const odd=vi.fn().mockResolvedValue(new Response(new Uint8Array([1]),{headers:{'content-type':'image/jpeg','cache-control':'public, max-age=999999'}}));
+  expect((await clothingProxy(actor,{path:'/api/clothing/INV001/photos/IMG001',method:'GET'},odd)).headers.get('cache-control')).toBe('private, no-store');
+ });
 });
 describe('photo reading for the other UiDs',()=>{
  const host='uid-bypaolo.10xid.com';
