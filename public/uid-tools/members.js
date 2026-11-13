@@ -310,7 +310,10 @@ stage.addEventListener('click',event=>{
 stage.addEventListener('change',event=>{if(event.target.id==='membersBusiness'){business=event.target.value;load();}});
 function reconcile(){
  const tabs=$('stageTabs');
- if(tabs&&overview){
+ // While the stage shows Web Links its tabs are link sections, not business Channels: add none there.
+ const showingLinks=!!tabs&&(root.VendorUI?.mode==='links'||!!tabs.querySelector('[data-stage-tab]'));
+ if(showingLinks)tabs.querySelectorAll('[data-um="business"]').forEach(node=>node.remove());
+ if(tabs&&overview&&!showingLinks){
   tabs.querySelectorAll('[data-um="business"]').forEach(node=>{if(!overview.businesses.some(item=>item.id===node.dataset.umBusiness))node.remove();});
   for(const item of overview.businesses){
    let button=[...tabs.querySelectorAll('button')].find(node=>(node.querySelector('strong')?.textContent||'').trim().toLowerCase()===item.name.toLowerCase()||node.dataset.umBusiness===item.id);
