@@ -1,13 +1,11 @@
 import {getLoginSession} from '@/lib/auth/login';
 import {userByAuthUserId} from '@/lib/db/accounts';
-import {cidUrl} from '@/lib/cid/profile';
+import {CID_COMPANIES,cidUrl,isCidSlug} from '@/lib/cid/profile';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const company = 'brandingcentres';
-const companyOrigin = new URL(cidUrl(company)).origin;
-const upstream = 'https://uid-bypaolo.10xid.com/internal/cid-work-decks/branding-centres';
+const upstream = 'https://uid-bypaolo.10xid.com/internal/cid-work-decks/';
 const uuid = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
 const privateHeaders = {
   'cache-control': 'private, no-store',
@@ -17,12 +15,12 @@ const privateHeaders = {
 
 export async function GET(request: Request, {params}: {params: Promise<{slug: string}>}) {
   const {slug} = await params;
-  if (slug !== company || request.headers.get('origin') !== companyOrigin) {
+  if (!isCidSlug(slug) || request.headers.get('origin') !== new URL(cidUrl(slug)).origin) {
     return Response.json({error: 'Company workspace not found.'}, {status: 404, headers: privateHeaders});
   }
   const headers = {
     ...privateHeaders,
-    'access-control-allow-origin': companyOrigin,
+    'access-control-allow-origin': new URL(cidUrl(slug)).origin,
     'access-control-allow-credentials': 'true',
   };
   const fail = (status: number, error: string) => Response.json({error}, {status, headers});
@@ -37,7 +35,8 @@ export async function GET(request: Request, {params}: {params: Promise<{slug: st
 
     const secret = process.env.CID_WORK_DECKS_SECRET;
     if (!secret || !/^[a-f0-9]{64}$/.test(secret)) return fail(503, 'Company Work Decks are unavailable.');
-    const response = await fetch(id ? upstream + '/' + id : upstream, {
+    const companyPath = upstream + CID_COMPANIES[slug].organizationSlug;
+    const response = await fetch(id ? companyPath + '/' + id : companyPath, {
       headers: {authorization: 'Bearer ' + secret, 'x-10xid-account': account.id},
       cache: 'no-store',
       redirect: 'error',

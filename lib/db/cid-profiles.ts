@@ -11,15 +11,25 @@ export async function publicCid(slug:CidSlug){
   return {slug,profile:row?validateProfile(row.profile):emptyProfile(slug),version:row?Number(row.version):0,connected:Boolean(row)};
 }
 /** A live, assigned membership is mandatory, even with an explicit capability grant. */
-async function memberAccess(tx:Parameters<Parameters<typeof inOwnerTransaction>[2]>[0],slug:CidSlug,userId:string){
+type CidTransaction = Parameters<Parameters<typeof inOwnerTransaction>[2]>[0];
+
+async function memberRole(tx:CidTransaction,slug:CidSlug,userId:string){
   const result=await tx.execute(sql`select m.role::text from memberships m join users u on u.id=m.user_id
     and u.deleted_at is null and not u.is_service join organizations o on o.id=m.organization_id and o.deleted_at is null
     where m.organization_id=nullif(current_setting('app.org_id',true),'')::uuid and o.slug=${CID_COMPANIES[slug].organizationSlug} and m.user_id=${userId}::uuid for update of m`);
-  const role=result.rows[0]?.role;
-  if(typeof role!=='string')throw new MemberError('You are not an assigned member of this company.');
+  return result.rows[0]?.role;
+}
+
+async function mayEditProfile(tx:CidTransaction,userId:string,role:string){
   const grants=await tx.execute(sql`select capability,deny from permissions where organization_id=nullif(current_setting('app.org_id',true),'')::uuid
     and user_id=${userId}::uuid and capability='cid.profile.write' and scope_type='organization' and scope_id is null and revoked_at is null`);
-  if(!mayEditCid(role,grants.rows as {capability:string;deny:boolean}[]))throw new MemberError('Your company role does not allow profile editing.');
+  return mayEditCid(role,grants.rows as {capability:string;deny:boolean}[]);
+}
+
+async function memberAccess(tx:CidTransaction,slug:CidSlug,userId:string){
+  const role=await memberRole(tx,slug,userId);
+  if(typeof role!=='string')throw new MemberError('You are not an assigned member of this company.');
+  if(!await mayEditProfile(tx,userId,role))throw new MemberError('Your company role does not allow profile editing.');
 }
 async function organization(slug:CidSlug){
   const result=await db.execute(sql`select organization_id::text as id from cid_public_profiles where slug=${slug}`);
@@ -27,6 +37,15 @@ async function organization(slug:CidSlug){
   if(typeof id!=='string')throw new MemberError('This company profile has not been connected to its account yet.',409);
   return id;
 }
+export async function cidWorkspaceAccess(slug:CidSlug,userId:string){
+  const id=await organization(slug);
+  return inOwnerTransaction(id,userId,async tx=>{
+    const role=await memberRole(tx,slug,userId);
+    if(typeof role!=='string')return {canEdit:false,canViewWorkDecks:false};
+    return {canEdit:await mayEditProfile(tx,userId,role),canViewWorkDecks:true};
+  });
+}
+
 export async function editableCid(slug:CidSlug,userId:string){
   const id=await organization(slug);
   return inOwnerTransaction(id,userId,async tx=>{
